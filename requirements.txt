@@ -34,11 +34,12 @@ python-dotenv==1.2.1
 PyYAML==6.0.3
 requests==2.32.5
 requests-toolbelt==1.0.0
+selenium==4.34.2
 starlette==0.50.0
 tenacity==9.1.2
 typing-inspection==0.4.2
-typing_extensions==4.15.0
-urllib3==2.6.3
+typing_extensions==4.14.1
+urllib3==2.5.0
 uuid_utils==0.14.0
 uvicorn==0.40.0
 xxhash==3.6.0
