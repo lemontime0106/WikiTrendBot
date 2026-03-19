@@ -1,4 +1,8 @@
 const loadTrendsButton = document.getElementById("loadTrendsButton");
+const trendModeButton = document.getElementById("trendModeButton");
+const manualModeButton = document.getElementById("manualModeButton");
+const trendModePanel = document.getElementById("trendModePanel");
+const manualModePanel = document.getElementById("manualModePanel");
 const trendList = document.getElementById("trendList");
 const trendCountBadge = document.getElementById("trendCountBadge");
 const statusText = document.getElementById("statusText");
@@ -6,6 +10,7 @@ const modelBadge = document.getElementById("modelBadge");
 const articleMeta = document.getElementById("articleMeta");
 const articleOutput = document.getElementById("articleOutput");
 const copyArticleButton = document.getElementById("copyArticleButton");
+const copyTagsButton = document.getElementById("copyTagsButton");
 const toggleEditButton = document.getElementById("toggleEditButton");
 const copyStatusText = document.getElementById("copyStatusText");
 const editorSection = document.getElementById("editorSection");
@@ -13,10 +18,15 @@ const articleEditor = document.getElementById("articleEditor");
 const previewArticleButton = document.getElementById("previewArticleButton");
 const searchContextList = document.getElementById("searchContextList");
 const productList = document.getElementById("productList");
+const tagList = document.getElementById("tagList");
+const manualKeywordInput = document.getElementById("manualKeywordInput");
+const manualGenerateButton = document.getElementById("manualGenerateButton");
 
 let selectedKeyword = "";
 let currentArticleMarkdown = "";
+let currentTags = [];
 let isEditMode = false;
+let currentMode = "trend";
 
 function escapeHtml(value) {
   return value
@@ -97,8 +107,26 @@ function setStatus(message) {
   statusText.textContent = message;
 }
 
+function switchMode(mode) {
+  currentMode = mode;
+  const isTrendMode = mode === "trend";
+
+  trendModeButton.classList.toggle("is-active", isTrendMode);
+  manualModeButton.classList.toggle("is-active", !isTrendMode);
+  trendModePanel.classList.toggle("hidden", !isTrendMode);
+  manualModePanel.classList.toggle("hidden", isTrendMode);
+
+  if (isTrendMode) {
+    setStatus("트렌드 키워드를 선택해 글을 생성할 수 있습니다.");
+  } else {
+    setStatus("직접 입력한 키워드로 글을 생성할 수 있습니다.");
+    manualKeywordInput.focus();
+  }
+}
+
 function setToolbarState({ copyDisabled, editDisabled, message }) {
   copyArticleButton.disabled = copyDisabled;
+  copyTagsButton.disabled = copyDisabled;
   toggleEditButton.disabled = editDisabled;
   copyStatusText.textContent = message;
 }
@@ -147,6 +175,23 @@ function renderProductRecommendations(items) {
     .join("");
 }
 
+function renderRecommendedTags(items) {
+  currentTags = Array.isArray(items) ? items : [];
+
+  if (!currentTags.length) {
+    tagList.className = "support-list empty-state";
+    tagList.textContent = "추천 태그가 없습니다.";
+    return;
+  }
+
+  tagList.className = "support-list";
+  tagList.innerHTML = `
+    <div class="tag-chip-wrap">
+      ${currentTags.map((tag) => `<span class="tag-chip">${escapeHtml(tag)}</span>`).join("")}
+    </div>
+  `;
+}
+
 function syncEditor(markdown) {
   currentArticleMarkdown = markdown;
   articleEditor.value = markdown;
@@ -181,6 +226,7 @@ function setArticleLoading(keyword) {
   syncEditor("");
   renderSearchResults([]);
   renderProductRecommendations([]);
+  renderRecommendedTags([]);
   closeEditor();
   setToolbarState({
     copyDisabled: true,
@@ -239,6 +285,7 @@ async function loadTrends() {
   syncEditor("");
   renderSearchResults([]);
   renderProductRecommendations([]);
+  renderRecommendedTags([]);
   closeEditor();
   setToolbarState({
     copyDisabled: true,
@@ -270,6 +317,7 @@ async function loadTrends() {
 async function generateArticle(keyword) {
   setArticleLoading(keyword);
   setStatus(`"${keyword}" 키워드로 글을 생성하고 있습니다.`);
+  manualGenerateButton.disabled = true;
 
   try {
     const response = await fetch("/generate", {
@@ -292,6 +340,7 @@ async function generateArticle(keyword) {
     articleOutput.innerHTML = renderMarkdown(currentArticleMarkdown);
     renderSearchResults(data.search_results || []);
     renderProductRecommendations(data.product_recommendations || []);
+    renderRecommendedTags(data.recommended_tags || []);
     setToolbarState({
       copyDisabled: false,
       editDisabled: false,
@@ -305,6 +354,7 @@ async function generateArticle(keyword) {
     syncEditor("");
     renderSearchResults([]);
     renderProductRecommendations([]);
+    renderRecommendedTags([]);
     closeEditor();
     setToolbarState({
       copyDisabled: true,
@@ -313,6 +363,7 @@ async function generateArticle(keyword) {
     });
     setStatus("글 생성에 실패했습니다.");
   } finally {
+    manualGenerateButton.disabled = false;
     document.querySelectorAll(".keyword-button").forEach((item) => {
       item.disabled = false;
       item.classList.toggle("is-selected", item.dataset.keyword === selectedKeyword);
@@ -330,6 +381,19 @@ copyArticleButton.addEventListener("click", async () => {
     copyStatusText.textContent = "글을 클립보드에 복사했습니다.";
   } catch {
     copyStatusText.textContent = "복사에 실패했습니다. 브라우저 권한을 확인해 주세요.";
+  }
+});
+
+copyTagsButton.addEventListener("click", async () => {
+  if (!currentTags.length) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(currentTags.join(", "));
+    copyStatusText.textContent = "태그를 클립보드에 복사했습니다.";
+  } catch {
+    copyStatusText.textContent = "태그 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.";
   }
 });
 
@@ -353,6 +417,36 @@ previewArticleButton.addEventListener("click", () => {
   articleOutput.className = "article-output";
   articleOutput.innerHTML = renderMarkdown(currentArticleMarkdown);
   copyStatusText.textContent = "수정한 내용을 미리보기에 반영했습니다.";
+});
+
+trendModeButton.addEventListener("click", () => {
+  switchMode("trend");
+});
+
+manualModeButton.addEventListener("click", () => {
+  switchMode("manual");
+});
+
+manualGenerateButton.addEventListener("click", () => {
+  const keyword = manualKeywordInput.value.trim();
+  if (!keyword) {
+    setStatus("직접 입력할 키워드를 먼저 작성해 주세요.");
+    manualKeywordInput.focus();
+    return;
+  }
+
+  document.querySelectorAll(".keyword-button").forEach((item) => {
+    item.classList.remove("is-selected");
+  });
+  selectedKeyword = "";
+  generateArticle(keyword);
+});
+
+manualKeywordInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    manualGenerateButton.click();
+  }
 });
 
 loadTrendsButton.addEventListener("click", loadTrends);

@@ -19,6 +19,7 @@ class TrendWriterState(TypedDict, total=False):
     search_results: list[dict[str, str]]
     article_markdown: str
     product_recommendations: list[str]
+    recommended_tags: list[str]
     model: str
 
 
@@ -110,6 +111,21 @@ def _create_llm_runnable() -> Runnable:
     return _OpenAIRestRunnable()
 
 
+def _normalize_tistory_text(content: str) -> str:
+    cleaned = content.strip()
+    replacements = [
+        ("**", ""),
+        ("__", ""),
+        ("```", ""),
+        ("`", ""),
+    ]
+    for old, new in replacements:
+        cleaned = cleaned.replace(old, new)
+
+    lines = [line.rstrip() for line in cleaned.splitlines()]
+    return "\n".join(lines).strip()
+
+
 async def node_collect_search_context(state: TrendWriterState) -> TrendWriterState:
     keyword = (state.get("keyword") or "").strip()
     if not keyword:
@@ -143,7 +159,7 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
                 "키워드: {keyword}\n\n"
                 "네이버 검색 요약:\n{search_context}\n\n"
                 "요구사항:\n"
-                "- 제목 1개(H1)\n"
+                "- 제목 1개(H1), 본문 소제목은 H2/H3까지만 사용\n"
                 "- 도입은 검색 유입을 고려한 블로그 문체로 작성\n"
                 "- 본문은 H2 소제목 3~4개로 구성\n"
                 "- 내용은 검색 결과에 나온 현재 이슈와 맥락을 우선 반영\n"
@@ -152,6 +168,8 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
                 "- 검색 요약에 없는 세부 숫자, 일정, 규정, 전적, 인용문은 추측해서 쓰지 말 것\n"
                 "- 사실이 불확실한 부분은 단정하지 말고 완곡하게 설명할 것\n"
                 "- 글 안에 쿠팡, 쇼핑, 구매 유도 문구를 넣지 말 것\n"
+                "- 티스토리용이므로 **굵게**, __강조__, 표, 코드블록 같은 마크다운 문법은 쓰지 말 것\n"
+                "- 본문은 일반 문장과 줄바꿈 위주로 쓰고, 헤더 문법만 최소한으로 사용\n"
                 "- 내용은 개념 소개, 왜 지금 주목받는지, 알아둘 포인트를 포함\n"
                 "- 결론에는 독자 행동을 유도하는 마무리 문장 포함\n"
                 "- 마지막에 '오늘의 한줄 요약' 1줄\n"
@@ -171,7 +189,7 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
         raise RuntimeError("LLM 응답이 비어있습니다.")
 
     return {
-        "article_markdown": content.strip(),
+        "article_markdown": _normalize_tistory_text(content),
         "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
     }
 
@@ -224,16 +242,75 @@ async def node_recommend_products(state: TrendWriterState) -> TrendWriterState:
     return {"product_recommendations": recommendations[:3]}
 
 
+async def node_recommend_tags(state: TrendWriterState) -> TrendWriterState:
+    keyword = (state.get("keyword") or "").strip()
+    search_context = (state.get("search_context") or "").strip()
+    if not keyword or not search_context:
+        raise RuntimeError("태그 추천을 위한 키워드 또는 검색 컨텍스트가 없습니다.")
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "너는 SEO 태그 추천 도우미다. 티스토리 블로그용 검색 유입 태그를 한국어로 추천한다.",
+            ),
+            (
+                "user",
+                "아래 키워드와 검색 요약을 바탕으로 티스토리 태그를 최소 10개 추천해줘.\n\n"
+                "키워드: {keyword}\n\n"
+                "검색 요약:\n{search_context}\n\n"
+                "규칙:\n"
+                '- 결과는 반드시 JSON 배열 문자열 형식 예시 ["태그1", "태그2"]\n'
+                "- 태그는 검색 유입을 고려해 구체 키워드와 확장 키워드를 섞기\n"
+                "- 중복 없이 최소 10개, 최대 15개\n"
+                "- 해시 기호(#) 없이 태그 텍스트만 작성\n",
+            ),
+        ]
+    )
+
+    llm = _create_llm_runnable()
+    messages = prompt.format_messages(keyword=keyword, search_context=search_context)
+    result = await llm.ainvoke(messages)
+    content = getattr(result, "content", None)
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("태그 추천 응답이 비어있습니다.")
+
+    cleaned = content.strip()
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        parsed = [
+            line.strip("- ").strip().lstrip("#").strip()
+            for line in cleaned.splitlines()
+            if line.strip()
+        ]
+
+    tags = []
+    seen: set[str] = set()
+    for item in parsed:
+        if not isinstance(item, str):
+            continue
+        tag = item.strip().lstrip("#").strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        tags.append(tag)
+
+    return {"recommended_tags": tags[:15]}
+
+
 def build_trend_writer_graph() -> Any:
     g = StateGraph(TrendWriterState)
     g.add_node("collect_search_context", node_collect_search_context)
     g.add_node("generate_article", node_generate_article)
     g.add_node("recommend_products", node_recommend_products)
+    g.add_node("recommend_tags", node_recommend_tags)
 
     g.set_entry_point("collect_search_context")
     g.add_edge("collect_search_context", "generate_article")
     g.add_edge("generate_article", "recommend_products")
-    g.add_edge("recommend_products", END)
+    g.add_edge("recommend_products", "recommend_tags")
+    g.add_edge("recommend_tags", END)
 
     return g.compile()
 

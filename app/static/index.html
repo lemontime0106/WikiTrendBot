@@ -15,7 +15,7 @@
       <p class="eyebrow">WikiTrendBot</p>
       <h1>실시간 키워드 10개를 보고, 원하는 주제로 바로 글을 생성하세요.</h1>
       <p class="hero-copy">
-        먼저 나무위키 트렌드를 불러온 뒤, 마음에 드는 키워드 하나를 고르면 해당 주제로 마크다운 글을 작성합니다.
+        나무위키 트렌드에서 고르거나 직접 키워드를 입력해서 티스토리용 글, 추천 상품, 검색 태그를 한 번에 준비할 수 있습니다.
       </p>
       <div class="hero-actions">
         <button id="loadTrendsButton" class="primary-button">키워드 10개 불러오기</button>
@@ -25,6 +25,12 @@
 
     <section class="panel-grid">
       <section class="panel">
+        <div class="mode-tabs">
+          <button id="trendModeButton" class="mode-tab is-active" type="button">트렌드 선택</button>
+          <button id="manualModeButton" class="mode-tab" type="button">직접 입력</button>
+        </div>
+
+        <section id="trendModePanel">
         <div class="panel-heading">
           <h2>트렌드 키워드</h2>
           <span id="trendCountBadge" class="badge">0개</span>
@@ -32,6 +38,18 @@
         <div id="trendList" class="keyword-list empty-state">
           아직 불러온 키워드가 없습니다.
         </div>
+        </section>
+
+        <section id="manualModePanel" class="manual-panel hidden">
+          <div class="panel-heading">
+            <h2>직접 키워드 입력</h2>
+            <span class="badge subtle">수동 생성</span>
+          </div>
+          <label class="manual-label" for="manualKeywordInput">작성할 키워드</label>
+          <input id="manualKeywordInput" class="manual-input" type="text" placeholder="예: WBC, 손흥민, 챔피언스리그">
+          <button id="manualGenerateButton" class="primary-button manual-generate-button" type="button">이 키워드로 글 생성</button>
+          <p class="manual-help">입력한 키워드로 네이버 검색 요약을 수집한 뒤 글을 생성합니다.</p>
+        </section>
       </section>
 
       <section class="panel article-panel">
@@ -42,6 +60,7 @@
         <div id="articleMeta" class="article-meta">키워드를 선택하면 이곳에 결과가 표시됩니다.</div>
         <div class="editor-toolbar">
           <button id="copyArticleButton" class="secondary-button" type="button" disabled>글 복사</button>
+          <button id="copyTagsButton" class="secondary-button" type="button" disabled>태그 복사</button>
           <button id="toggleEditButton" class="secondary-button" type="button" disabled>수정하기</button>
           <span id="copyStatusText" class="toolbar-status">생성 후 복사와 수정이 가능합니다.</span>
         </div>
@@ -70,6 +89,14 @@
             </div>
             <div id="productList" class="support-list empty-state">
               글 본문과 분리된 추천 상품이 여기에 표시됩니다.
+            </div>
+          </section>
+          <section class="support-panel">
+            <div class="editor-heading">
+              <h3>추천 태그</h3>
+            </div>
+            <div id="tagList" class="support-list empty-state">
+              검색 유입용 태그가 여기에 표시됩니다.
             </div>
           </section>
         </section>

@@ -57,6 +57,7 @@ async def generate(keyword: str | None = None):
         "search_results": out.get("search_results", []),
         "article_markdown": out.get("article_markdown"),
         "product_recommendations": out.get("product_recommendations", []),
+        "recommended_tags": out.get("recommended_tags", []),
     }
 
 
@@ -76,4 +77,5 @@ async def generate_from_selection(payload: GenerateRequest):
         "search_results": out.get("search_results", []),
         "article_markdown": out.get("article_markdown"),
         "product_recommendations": out.get("product_recommendations", []),
+        "recommended_tags": out.get("recommended_tags", []),
     }
