@@ -22,6 +22,7 @@ STATIC_DIR = BASE_DIR / "static"
 
 class GenerateRequest(BaseModel):
     keyword: str
+    user_purpose: str | None = None
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -44,19 +45,19 @@ async def get_trend():
 
 
 @app.get("/generate")
-async def generate(keyword: str | None = None):
+async def generate(keyword: str | None = None, user_purpose: str | None = None):
     if not keyword or not keyword.strip():
         raise HTTPException(status_code=400, detail="keyword 쿼리가 필요합니다.")
     try:
-        out = await run_trend_writer(keyword=keyword)
+        out = await run_trend_writer(keyword=keyword, user_purpose=user_purpose)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"글 생성에 실패했습니다: {exc}") from exc
     return {
         "selected_keyword": keyword.strip(),
+        "user_purpose": (user_purpose or "").strip(),
         "model": out.get("model"),
         "search_results": out.get("search_results", []),
         "article_markdown": out.get("article_markdown"),
-        "product_recommendations": out.get("product_recommendations", []),
         "recommended_tags": out.get("recommended_tags", []),
     }
 
@@ -64,18 +65,19 @@ async def generate(keyword: str | None = None):
 @app.post("/generate")
 async def generate_from_selection(payload: GenerateRequest):
     keyword = payload.keyword.strip()
+    user_purpose = (payload.user_purpose or "").strip()
     if not keyword:
         raise HTTPException(status_code=400, detail="keyword 값이 비어 있습니다.")
 
     try:
-        out = await run_trend_writer(keyword=keyword)
+        out = await run_trend_writer(keyword=keyword, user_purpose=user_purpose)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"글 생성에 실패했습니다: {exc}") from exc
     return {
         "selected_keyword": keyword,
+        "user_purpose": user_purpose,
         "model": out.get("model"),
         "search_results": out.get("search_results", []),
         "article_markdown": out.get("article_markdown"),
-        "product_recommendations": out.get("product_recommendations", []),
         "recommended_tags": out.get("recommended_tags", []),
     }

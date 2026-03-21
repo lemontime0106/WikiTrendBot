@@ -17,10 +17,10 @@ const editorSection = document.getElementById("editorSection");
 const articleEditor = document.getElementById("articleEditor");
 const previewArticleButton = document.getElementById("previewArticleButton");
 const searchContextList = document.getElementById("searchContextList");
-const productList = document.getElementById("productList");
 const tagList = document.getElementById("tagList");
 const manualKeywordInput = document.getElementById("manualKeywordInput");
 const manualGenerateButton = document.getElementById("manualGenerateButton");
+const userPurposeInput = document.getElementById("userPurposeInput");
 
 let selectedKeyword = "";
 let currentArticleMarkdown = "";
@@ -155,26 +155,6 @@ function renderSearchResults(items) {
     .join("");
 }
 
-function renderProductRecommendations(items) {
-  if (!Array.isArray(items) || !items.length) {
-    productList.className = "support-list empty-state";
-    productList.textContent = "연관 추천 상품이 없습니다.";
-    return;
-  }
-
-  productList.className = "support-list";
-  productList.innerHTML = items
-    .map(
-      (item) => `
-        <article class="support-card">
-          <strong class="support-card-title">${escapeHtml(item)}</strong>
-          <div class="support-card-meta">글 본문과 분리된 별도 추천 상품</div>
-        </article>
-      `
-    )
-    .join("");
-}
-
 function renderRecommendedTags(items) {
   currentTags = Array.isArray(items) ? items : [];
 
@@ -220,12 +200,14 @@ async function parseResponse(response) {
 }
 
 function setArticleLoading(keyword) {
-  articleMeta.textContent = `"${keyword}" 키워드로 글을 생성 중입니다.`;
+  const userPurpose = userPurposeInput.value.trim();
+  articleMeta.textContent = userPurpose
+    ? `"${keyword}" 키워드와 사용자 목적을 반영해 글을 생성 중입니다.`
+    : `"${keyword}" 키워드로 글을 생성 중입니다.`;
   articleOutput.classList.remove("empty-state");
   articleOutput.innerHTML = "글을 생성하고 있습니다...";
   syncEditor("");
   renderSearchResults([]);
-  renderProductRecommendations([]);
   renderRecommendedTags([]);
   closeEditor();
   setToolbarState({
@@ -284,7 +266,6 @@ async function loadTrends() {
   modelBadge.textContent = "모델 대기 중";
   syncEditor("");
   renderSearchResults([]);
-  renderProductRecommendations([]);
   renderRecommendedTags([]);
   closeEditor();
   setToolbarState({
@@ -315,6 +296,7 @@ async function loadTrends() {
 }
 
 async function generateArticle(keyword) {
+  const userPurpose = userPurposeInput.value.trim();
   setArticleLoading(keyword);
   setStatus(`"${keyword}" 키워드로 글을 생성하고 있습니다.`);
   manualGenerateButton.disabled = true;
@@ -325,7 +307,7 @@ async function generateArticle(keyword) {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ keyword }),
+      body: JSON.stringify({ keyword, user_purpose: userPurpose }),
     });
     const data = await parseResponse(response);
 
@@ -334,12 +316,13 @@ async function generateArticle(keyword) {
     }
 
     modelBadge.textContent = data.model || "모델 정보 없음";
-    articleMeta.textContent = `선택 키워드: ${data.selected_keyword}`;
+    articleMeta.textContent = data.user_purpose
+      ? `선택 키워드: ${data.selected_keyword} / 사용자 목적 반영 완료`
+      : `선택 키워드: ${data.selected_keyword}`;
     articleOutput.className = "article-output";
     syncEditor(data.article_markdown || "");
     articleOutput.innerHTML = renderMarkdown(currentArticleMarkdown);
     renderSearchResults(data.search_results || []);
-    renderProductRecommendations(data.product_recommendations || []);
     renderRecommendedTags(data.recommended_tags || []);
     setToolbarState({
       copyDisabled: false,
@@ -353,7 +336,6 @@ async function generateArticle(keyword) {
     articleOutput.textContent = error.message;
     syncEditor("");
     renderSearchResults([]);
-    renderProductRecommendations([]);
     renderRecommendedTags([]);
     closeEditor();
     setToolbarState({

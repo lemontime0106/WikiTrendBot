@@ -15,7 +15,7 @@
       <p class="eyebrow">WikiTrendBot</p>
       <h1>실시간 키워드 10개를 보고, 원하는 주제로 바로 글을 생성하세요.</h1>
       <p class="hero-copy">
-        나무위키 트렌드에서 고르거나 직접 키워드를 입력해서 티스토리용 글, 추천 상품, 검색 태그를 한 번에 준비할 수 있습니다.
+        나무위키 트렌드에서 고르거나 직접 키워드를 입력해서 티스토리용 글과 검색 태그를 한 번에 준비할 수 있습니다.
       </p>
       <div class="hero-actions">
         <button id="loadTrendsButton" class="primary-button">키워드 10개 불러오기</button>
@@ -25,6 +25,16 @@
 
     <section class="panel-grid">
       <section class="panel">
+        <section class="custom-context-panel">
+          <div class="panel-heading">
+            <h2>사용자 정의 정보</h2>
+            <span class="badge subtle">공통 반영</span>
+          </div>
+          <label class="manual-label" for="userPurposeInput">사용자 목적 / 원하는 글 방향</label>
+          <textarea id="userPurposeInput" class="manual-input manual-textarea" placeholder="예: 티스토리 유입형으로 써줘, 초보자도 이해하기 쉽게 써줘, 팬 반응 중심으로 정리해줘"></textarea>
+          <p class="manual-help">트렌드 선택과 직접 입력 모두 이 내용을 함께 반영합니다.</p>
+        </section>
+
         <div class="mode-tabs">
           <button id="trendModeButton" class="mode-tab is-active" type="button">트렌드 선택</button>
           <button id="manualModeButton" class="mode-tab" type="button">직접 입력</button>
@@ -81,14 +91,6 @@
             </div>
             <div id="searchContextList" class="support-list empty-state">
               글 생성 시 네이버 검색 요약이 여기에 표시됩니다.
-            </div>
-          </section>
-          <section class="support-panel">
-            <div class="editor-heading">
-              <h3>연관 추천 상품</h3>
-            </div>
-            <div id="productList" class="support-list empty-state">
-              글 본문과 분리된 추천 상품이 여기에 표시됩니다.
             </div>
           </section>
           <section class="support-panel">

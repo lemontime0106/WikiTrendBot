@@ -160,6 +160,10 @@ h1 {
   margin-bottom: 18px;
 }
 
+.custom-context-panel {
+  margin-bottom: 18px;
+}
+
 .mode-tab {
   flex: 1;
   padding: 12px 14px;
@@ -321,6 +325,11 @@ h1 {
   font: inherit;
 }
 
+.manual-textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
 .manual-generate-button {
   width: 100%;
   margin-top: 14px;
@@ -334,7 +343,7 @@ h1 {
 
 .support-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   margin-top: 18px;
 }
