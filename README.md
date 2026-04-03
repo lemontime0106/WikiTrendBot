@@ -9,6 +9,11 @@
 uvicorn app.main:app --reload
 ```
 
+## 개발 환경
+
+- Python 3.11 이상 권장
+- 의존성 설치: `pip install -r requirements.txt`
+
 ## API
 
 - `GET /trend`: 트렌드 키워드 가져오기
