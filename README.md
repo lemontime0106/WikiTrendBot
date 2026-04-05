@@ -5,8 +5,9 @@
 ## 실행
 
 ```bash
-.\.venv\Scripts\Activate.ps1
-uvicorn app.main:app --reload
+python -m venv .venv
+make install
+make run
 ```
 
 ## 개발 환경

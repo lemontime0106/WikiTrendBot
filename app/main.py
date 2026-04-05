@@ -7,7 +7,7 @@ if sys.platform.startswith("win"):
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from starlette.staticfiles import StaticFiles
 from app.service.get_trend import get_trend_data
@@ -34,6 +34,14 @@ def root():
     if not index_file.exists():
         raise HTTPException(status_code=404, detail="프론트 페이지를 찾을 수 없습니다.")
     return FileResponse(index_file)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    favicon_file = STATIC_DIR / "favicon.ico"
+    if favicon_file.exists():
+        return FileResponse(favicon_file)
+    return Response(status_code=204)
 
 
 @app.get("/trend")

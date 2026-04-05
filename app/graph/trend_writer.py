@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import Any, Optional, TypedDict
@@ -50,14 +51,28 @@ async def _openai_chat_completions(
     }
 
     async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            json=payload,
-        )
-        resp.raise_for_status()
+        try:
+            resp = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=payload,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text.strip()
+            if len(detail) > 400:
+                detail = detail[:400].rstrip() + "..."
+            raise RuntimeError(
+                f"LLM API 요청이 실패했습니다. status={exc.response.status_code}, body={detail or '응답 본문 없음'}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"LLM API 연결에 실패했습니다: {exc}") from exc
+
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(f"LLM 응답 형식이 예상과 다릅니다: {data}") from exc
 
 
 def _create_llm_runnable() -> Runnable:
@@ -70,30 +85,48 @@ def _create_llm_runnable() -> Runnable:
 
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
-
-    try:
-        from langchain_openai import ChatOpenAI  # type: ignore
-
-        return ChatOpenAI(model=model, temperature=temperature)
-    except Exception:
-        pass
-
-    try:
-        from langchain.chat_models import ChatOpenAI  # type: ignore
-
-        return ChatOpenAI(model_name=model, temperature=temperature)
-    except Exception:
-        pass
-
     api_key = os.getenv("OPENAI_API_KEY")
+    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    normalized_base_url = base_url.rstrip("/")
+    use_rest_fallback = normalized_base_url != "https://api.openai.com/v1"
+
+    if not use_rest_fallback:
+        try:
+            from langchain_openai import ChatOpenAI  # type: ignore
+
+            return ChatOpenAI(
+                model=model,
+                temperature=temperature,
+                api_key=api_key,
+                base_url=normalized_base_url,
+            )
+        except Exception:
+            pass
+
+        try:
+            from langchain.chat_models import ChatOpenAI  # type: ignore
+
+            return ChatOpenAI(
+                model_name=model,
+                temperature=temperature,
+                openai_api_key=api_key,
+            )
+        except Exception:
+            pass
+
     if not api_key:
         raise RuntimeError(
             "LLM 설정이 필요합니다. (1) langchain_openai 설치 또는 (2) OPENAI_API_KEY 환경변수를 설정하세요."
         )
 
-    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-
     class _OpenAIRestRunnable(Runnable):
+        def invoke(self, input: Any, config: Any | None = None, **kwargs: Any) -> Any:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(self.ainvoke(input, config=config, **kwargs))
+            raise RuntimeError("실행 중인 이벤트 루프에서는 invoke 대신 ainvoke를 사용해야 합니다.")
+
         async def ainvoke(self, input: Any, config: Any | None = None, **kwargs: Any) -> Any:
             if isinstance(input, list) and all(isinstance(m, BaseMessage) for m in input):
                 messages = input
@@ -102,7 +135,7 @@ def _create_llm_runnable() -> Runnable:
             text = await _openai_chat_completions(
                 api_key=api_key,
                 model=model,
-                base_url=base_url,
+                base_url=normalized_base_url,
                 temperature=temperature,
                 messages=messages,
             )
