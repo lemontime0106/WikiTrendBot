@@ -138,9 +138,15 @@ async def publish_post(
             tags=tag_list,
             image_paths_by_slot=image_paths_by_slot,
         )
+        status = result.get("status")
+        message = (
+            "티스토리 입력을 완료했습니다. 브라우저에서 최종 발행을 확인해 주세요."
+            if status == "WAITING_FINAL_APPROVAL"
+            else "티스토리 업로드를 완료했습니다."
+        )
         return {
             "ok": True,
-            "message": "티스토리 업로드를 완료했습니다.",
+            "message": message,
             **result,
         }
     except Exception as exc:

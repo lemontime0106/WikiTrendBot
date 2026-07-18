@@ -48,6 +48,7 @@ make run
 - 첫 업로드 시 티스토리 로그인 화면이 뜨면 직접 로그인하면 되고, 로그인 상태는 `.tistory-auth.json`에 저장됩니다.
 - `TISTORY_LOGIN_ID`, `TISTORY_LOGIN_PASSWORD`를 넣어두면 일반 로그인 폼이 보일 때 자동 입력을 먼저 시도합니다.
 - 다만 카카오 추가 인증, 캡차, 보안 확인 화면이 뜨면 완전 자동 로그인 대신 수동 확인이 필요할 수 있습니다.
+- 기본값은 최종 발행 버튼을 자동으로 누르지 않는 assisted 모드입니다. 제목, 본문, 이미지, 태그 입력과 검증이 끝나면 브라우저에서 직접 최종 발행을 확인합니다.
 
 선택 환경변수:
 
@@ -57,6 +58,8 @@ make run
 - `TISTORY_STORAGE_STATE_PATH` (기본값: `.tistory-auth.json`)
 - `TISTORY_HEADLESS` (기본값: `false`)
 - `TISTORY_KEEP_BROWSER_OPEN` (기본값: `false`)
+- `TISTORY_AUTO_FINAL_PUBLISH` (기본값: `false`, `true`면 검증 후 최종 발행 버튼까지 자동 클릭)
+- `TISTORY_MANUAL_PUBLISH_TIMEOUT_SECONDS` (기본값: `1800`, assisted 모드에서 수동 발행 완료를 기다리는 시간)
 
 `TISTORY_BLOG_URL`에는 블로그의 기본 홈 주소를 넣어야 합니다.
 

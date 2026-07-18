@@ -156,6 +156,13 @@ function setToolbarState({ copyDisabled, editDisabled, message }) {
   copyStatusText.textContent = message;
 }
 
+function formatPublishSteps(steps) {
+  if (!Array.isArray(steps) || !steps.length) {
+    return "";
+  }
+  return steps.map((item) => item.message || item.step).filter(Boolean).join(" / ");
+}
+
 function renderSearchResults(items) {
   if (!Array.isArray(items) || !items.length) {
     searchContextList.className = "support-list empty-state";
@@ -616,9 +623,19 @@ uploadToTistoryButton.addEventListener("click", async () => {
       throw new Error(data.detail || "티스토리 업로드에 실패했습니다.");
     }
 
-    publishStatusText.textContent = data.post_url
-      ? `업로드를 완료했습니다. 게시 주소: ${data.post_url}`
-      : "티스토리 업로드를 완료했습니다.";
+    const stepText = formatPublishSteps(data.status_steps);
+    const suffix = stepText ? ` 진행 단계: ${stepText}` : "";
+    if (data.status === "WAITING_FINAL_APPROVAL") {
+      publishStatusText.textContent = `${data.message || "티스토리 입력을 완료했습니다. 브라우저에서 최종 발행을 확인해 주세요."}${suffix}`;
+    } else if (data.status === "UNKNOWN_RESULT") {
+      publishStatusText.textContent = data.post_url
+        ? `발행 결과를 확정하지 못했습니다. 현재 주소: ${data.post_url}${suffix}`
+        : `발행 결과를 확정하지 못했습니다.${suffix}`;
+    } else {
+      publishStatusText.textContent = data.post_url
+        ? `업로드를 완료했습니다. 게시 주소: ${data.post_url}${suffix}`
+        : `티스토리 업로드를 완료했습니다.${suffix}`;
+    }
   } catch (error) {
     publishStatusText.textContent = error.message;
   } finally {
