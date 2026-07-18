@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from typing import Any, Optional, TypedDict
 
 import httpx
@@ -20,6 +21,7 @@ class TrendWriterState(TypedDict, total=False):
     search_context: str
     search_results: list[dict[str, str]]
     article_markdown: str
+    image_prompts: list[dict[str, str | int]]
     recommended_tags: list[str]
     model: str
 
@@ -159,6 +161,27 @@ def _normalize_tistory_text(content: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _extract_image_prompts(content: str) -> list[dict[str, str | int]]:
+    pattern = re.compile(r"^\[여기에 들어갈 이미지 생성 프롬프트:\s*(.+?)\]\s*$")
+    image_prompts: list[dict[str, str | int]] = []
+
+    for line_index, raw_line in enumerate(content.splitlines(), start=1):
+        match = pattern.match(raw_line.strip())
+        if not match:
+            continue
+        prompt = match.group(1).strip()
+        image_prompts.append(
+            {
+                "slot": len(image_prompts) + 1,
+                "prompt": prompt,
+                "placeholder": raw_line.strip(),
+                "line": line_index,
+            }
+        )
+
+    return image_prompts
+
+
 async def node_collect_search_context(state: TrendWriterState) -> TrendWriterState:
     keyword = (state.get("keyword") or "").strip()
     if not keyword:
@@ -198,7 +221,10 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
                 "- 제목 1개(H1), 본문 소제목은 H2/H3까지만 사용\n"
                 "- 도입은 검색 유입을 고려한 블로그 문체로 작성\n"
                 "- 본문은 H2 소제목 3~4개로 구성\n"
+                "- 전체 분량은 공백 포함 최소 1000자 이상으로 작성하고, 내용이 얕아 보이지 않도록 충분히 설명\n"
                 "- 내용은 검색 결과에 나온 현재 이슈와 맥락을 우선 반영\n"
+                "- 주제의 배경, 핵심 쟁점, 의미를 연결해 전문성 있어 보이는 분석형 문장으로 작성\n"
+                "- 흔한 요약문처럼 쓰지 말고, 검색 요약을 바탕으로 독창적인 관점과 해석을 더할 것\n"
                 "- 사용자 목적이 비어 있지 않다면 글의 각도, 강조 포인트, 독자 대상에 자연스럽게 반영\n"
                 "- 검색 결과에 보이는 주제와 다르게 임의 해석하지 말 것\n"
                 "- WBC 같은 약어는 검색 결과가 가리키는 실제 주제를 따라 쓸 것\n"
@@ -207,8 +233,9 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
                 "- 글 안에 쿠팡, 쇼핑, 구매 유도 문구를 넣지 말 것\n"
                 "- 티스토리용이므로 **굵게**, __강조__, 표, 코드블록 같은 마크다운 문법은 쓰지 말 것\n"
                 "- 본문은 일반 문장과 줄바꿈 위주로 쓰고, 헤더 문법만 최소한으로 사용\n"
-                "- 블로그 실제 게시를 고려해 본문 중간 2~3곳에 이미지 자리표시자를 삽입\n"
+                "- 블로그 실제 게시를 고려해 본문 중간에 이미지 자리표시자를 최대 2개까지만 삽입\n"
                 "- 이미지 자리표시자는 반드시 한 줄 단독으로 [여기에 들어갈 이미지 생성 프롬프트: ...] 형식으로 작성\n"
+                "- 이미지 자리표시자가 꼭 필요하지 않은 글이면 1개만 넣어도 되며, 2개를 초과하면 안 됨\n"
                 "- 각 이미지 프롬프트에는 장면 설명, 분위기, 구도, 조명, 사실적인 스타일 여부를 구체적으로 포함\n"
                 "- 이미지 자리표시자는 관련 단락 바로 아래에 배치하고, 글 흐름을 끊지 않도록 자연스럽게 넣을 것\n"
                 "- 내용은 개념 소개, 왜 지금 주목받는지, 알아둘 포인트를 포함\n"
@@ -218,7 +245,7 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
                 "- 이모지 없이 깔끔한 문장으로 작성\n"
                 "- 단락마다 같은 문장 길이, 같은 접속어, 같은 어미를 반복하지 말 것\n"
                 "- 설명형 단락, 짧은 환기 문장, 정리형 문장을 섞어 호흡을 다양하게 만들 것\n"
-                "- 1200~1800자 정도\n",
+                "- 권장 분량은 1200~1800자이며, 어떤 경우에도 1000자 미만으로 끝내지 말 것\n",
             ),
         ]
     )
@@ -238,6 +265,7 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
 
     return {
         "article_markdown": _normalize_tistory_text(content),
+        "image_prompts": _extract_image_prompts(content),
         "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
     }
 

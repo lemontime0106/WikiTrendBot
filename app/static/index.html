@@ -84,6 +84,20 @@
           </div>
           <textarea id="articleEditor" class="article-editor" spellcheck="false"></textarea>
         </section>
+        <section class="publish-section">
+          <div class="editor-heading">
+            <h3>티스토리 업로드</h3>
+            <span class="badge subtle">Playwright</span>
+          </div>
+          <div class="publish-grid">
+            <label class="manual-label" for="publishTitleInput">업로드 제목</label>
+            <input id="publishTitleInput" class="manual-input" type="text" placeholder="글 생성 후 자동으로 채워집니다.">
+            <label class="manual-label" for="publishTagsInput">태그</label>
+            <input id="publishTagsInput" class="manual-input" type="text" placeholder="예: 손흥민, 축구, 프리미어리그">
+          </div>
+          <button id="uploadToTistoryButton" class="primary-button publish-button" type="button" disabled>티스토리 업로드 시작</button>
+          <p id="publishStatusText" class="manual-help">`TISTORY_BLOG_URL`에 설정된 블로그로 업로드합니다. 글 생성 후 제목, 태그, 이미지 파일을 확인한 다음 진행하세요.</p>
+        </section>
         <section class="support-grid">
           <section class="support-panel">
             <div class="editor-heading">
@@ -99,6 +113,14 @@
             </div>
             <div id="tagList" class="support-list empty-state">
               검색 유입용 태그가 여기에 표시됩니다.
+            </div>
+          </section>
+          <section class="support-panel support-panel-wide">
+            <div class="editor-heading">
+              <h3>이미지 슬롯</h3>
+            </div>
+            <div id="imagePromptList" class="support-list empty-state">
+              글 생성 시 이미지 프롬프트와 파일 연결 슬롯이 여기에 표시됩니다.
             </div>
           </section>
         </section>

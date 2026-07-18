@@ -18,6 +18,11 @@ const articleEditor = document.getElementById("articleEditor");
 const previewArticleButton = document.getElementById("previewArticleButton");
 const searchContextList = document.getElementById("searchContextList");
 const tagList = document.getElementById("tagList");
+const imagePromptList = document.getElementById("imagePromptList");
+const publishTitleInput = document.getElementById("publishTitleInput");
+const publishTagsInput = document.getElementById("publishTagsInput");
+const uploadToTistoryButton = document.getElementById("uploadToTistoryButton");
+const publishStatusText = document.getElementById("publishStatusText");
 const manualKeywordInput = document.getElementById("manualKeywordInput");
 const manualGenerateButton = document.getElementById("manualGenerateButton");
 const userPurposeInput = document.getElementById("userPurposeInput");
@@ -25,8 +30,13 @@ const userPurposeInput = document.getElementById("userPurposeInput");
 let selectedKeyword = "";
 let currentArticleMarkdown = "";
 let currentTags = [];
+let currentImagePrompts = [];
+let currentImageFiles = [];
+let currentPublishTitle = "";
 let isEditMode = false;
 let currentMode = "trend";
+
+const IMAGE_PROMPT_PATTERN = /^\[여기에 들어갈 이미지 생성 프롬프트:\s*(.+?)\]\s*$/;
 
 function escapeHtml(value) {
   return value
@@ -40,6 +50,7 @@ function renderMarkdown(markdown) {
   const blocks = [];
   let paragraph = [];
   let listItems = [];
+  let imageSlotCount = 0;
 
   const flushParagraph = () => {
     if (!paragraph.length) {
@@ -63,6 +74,20 @@ function renderMarkdown(markdown) {
     if (!line) {
       flushParagraph();
       flushList();
+      return;
+    }
+
+    const imagePromptMatch = rawLine.trim().match(IMAGE_PROMPT_PATTERN);
+    if (imagePromptMatch) {
+      flushParagraph();
+      flushList();
+      imageSlotCount += 1;
+      blocks.push(`
+        <div class="image-slot-preview">
+          <div class="image-slot-preview-label">이미지 슬롯 ${imageSlotCount}</div>
+          <div>${escapeHtml(imagePromptMatch[1])}</div>
+        </div>
+      `);
       return;
     }
 
@@ -172,9 +197,137 @@ function renderRecommendedTags(items) {
   `;
 }
 
+function extractTitleFromMarkdown(markdown) {
+  const titleLine = markdown
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.startsWith("# "));
+  return titleLine ? titleLine.slice(2).trim() : "";
+}
+
+function updatePublishForm({ markdown, tags, keepUserTitle = false }) {
+  const extractedTitle = extractTitleFromMarkdown(markdown || "");
+  currentPublishTitle = extractedTitle;
+
+  if (!keepUserTitle || !publishTitleInput.value.trim()) {
+    publishTitleInput.value = extractedTitle;
+  }
+
+  if (Array.isArray(tags)) {
+    publishTagsInput.value = tags.join(", ");
+  }
+
+  const hasArticle = Boolean((markdown || "").trim());
+  uploadToTistoryButton.disabled = !hasArticle;
+
+  if (!hasArticle) {
+    publishStatusText.textContent = "글 생성 후 제목, 태그, 이미지 파일을 확인한 다음 업로드할 수 있습니다.";
+  }
+}
+
+function normalizeImagePromptItem(item, index) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const prompt = typeof item.prompt === "string" ? item.prompt.trim() : "";
+  if (!prompt) {
+    return null;
+  }
+
+  const slot = Number.isInteger(item.slot) ? item.slot : index + 1;
+  return {
+    slot,
+    prompt,
+    placeholder:
+      typeof item.placeholder === "string" && item.placeholder.trim()
+        ? item.placeholder.trim()
+        : `[여기에 들어갈 이미지 생성 프롬프트: ${prompt}]`,
+    line: Number.isInteger(item.line) ? item.line : null,
+  };
+}
+
+function extractImagePromptsFromMarkdown(markdown) {
+  return markdown
+    .split(/\r?\n/)
+    .map((line, index) => {
+      const match = line.trim().match(IMAGE_PROMPT_PATTERN);
+      if (!match) {
+        return null;
+      }
+      return {
+        slot: index + 1,
+        prompt: match[1].trim(),
+        placeholder: line.trim(),
+        line: index + 1,
+      };
+    })
+    .filter(Boolean)
+    .map((item, index) => ({
+      ...item,
+      slot: index + 1,
+    }));
+}
+
+function renderImagePrompts(items) {
+  currentImagePrompts = Array.isArray(items) ? items : [];
+  currentImageFiles = currentImagePrompts.map((_, index) => currentImageFiles[index] || null);
+
+  if (!currentImagePrompts.length) {
+    imagePromptList.className = "support-list empty-state";
+    imagePromptList.textContent = "이미지 자리표시자가 없습니다.";
+    return;
+  }
+
+  imagePromptList.className = "support-list image-slot-list";
+  imagePromptList.innerHTML = currentImagePrompts
+    .map((item, index) => {
+      const file = currentImageFiles[index];
+      const lineText = item.line ? `본문 ${item.line}번째 줄` : "본문 위치 정보 없음";
+      return `
+        <article class="image-slot-card" data-slot-index="${index}">
+          <div class="image-slot-card-top">
+            <span class="badge">슬롯 ${item.slot}</span>
+            <span class="image-slot-line">${lineText}</span>
+          </div>
+          <div class="image-slot-prompt">${escapeHtml(item.prompt)}</div>
+          <label class="image-slot-upload">
+            <span>이 슬롯에 넣을 이미지 파일</span>
+            <input class="image-slot-input" type="file" accept="image/*" data-slot-index="${index}">
+          </label>
+          <div class="image-slot-file-name">${file ? escapeHtml(file.name) : "아직 연결된 파일이 없습니다."}</div>
+        </article>
+      `;
+    })
+    .join("");
+
+  document.querySelectorAll(".image-slot-input").forEach((input) => {
+    input.addEventListener("change", (event) => {
+      const index = Number(event.currentTarget.dataset.slotIndex);
+      const file = event.currentTarget.files?.[0] || null;
+      currentImageFiles[index] = file;
+
+      const fileNameNode = event.currentTarget
+        .closest(".image-slot-card")
+        ?.querySelector(".image-slot-file-name");
+      if (fileNameNode) {
+        fileNameNode.textContent = file ? file.name : "아직 연결된 파일이 없습니다.";
+      }
+
+      copyStatusText.textContent = file
+        ? `슬롯 ${index + 1}에 이미지 파일을 연결했습니다.`
+        : `슬롯 ${index + 1}의 이미지 연결을 비웠습니다.`;
+      publishStatusText.textContent = file
+        ? `슬롯 ${index + 1} 이미지가 연결되었습니다. 업로드를 진행할 수 있습니다.`
+        : `슬롯 ${index + 1} 이미지 연결이 비워졌습니다.`;
+    });
+  });
+}
+
 function syncEditor(markdown) {
   currentArticleMarkdown = markdown;
   articleEditor.value = markdown;
+  updatePublishForm({ markdown, tags: currentTags, keepUserTitle: false });
 }
 
 function openEditor() {
@@ -209,6 +362,8 @@ function setArticleLoading(keyword) {
   syncEditor("");
   renderSearchResults([]);
   renderRecommendedTags([]);
+  renderImagePrompts([]);
+  updatePublishForm({ markdown: "", tags: [] });
   closeEditor();
   setToolbarState({
     copyDisabled: true,
@@ -267,6 +422,8 @@ async function loadTrends() {
   syncEditor("");
   renderSearchResults([]);
   renderRecommendedTags([]);
+  renderImagePrompts([]);
+  updatePublishForm({ markdown: "", tags: [] });
   closeEditor();
   setToolbarState({
     copyDisabled: true,
@@ -324,6 +481,11 @@ async function generateArticle(keyword) {
     articleOutput.innerHTML = renderMarkdown(currentArticleMarkdown);
     renderSearchResults(data.search_results || []);
     renderRecommendedTags(data.recommended_tags || []);
+    updatePublishForm({ markdown: data.article_markdown || "", tags: data.recommended_tags || [] });
+    const imagePrompts = Array.isArray(data.image_prompts) && data.image_prompts.length
+      ? data.image_prompts.map(normalizeImagePromptItem).filter(Boolean)
+      : extractImagePromptsFromMarkdown(data.article_markdown || "");
+    renderImagePrompts(imagePrompts);
     setToolbarState({
       copyDisabled: false,
       editDisabled: false,
@@ -337,6 +499,8 @@ async function generateArticle(keyword) {
     syncEditor("");
     renderSearchResults([]);
     renderRecommendedTags([]);
+    renderImagePrompts([]);
+    updatePublishForm({ markdown: "", tags: [] });
     closeEditor();
     setToolbarState({
       copyDisabled: true,
@@ -398,7 +562,68 @@ previewArticleButton.addEventListener("click", () => {
   currentArticleMarkdown = articleEditor.value;
   articleOutput.className = "article-output";
   articleOutput.innerHTML = renderMarkdown(currentArticleMarkdown);
+  renderImagePrompts(extractImagePromptsFromMarkdown(currentArticleMarkdown));
+  updatePublishForm({ markdown: currentArticleMarkdown, tags: currentTags, keepUserTitle: true });
   copyStatusText.textContent = "수정한 내용을 미리보기에 반영했습니다.";
+});
+
+uploadToTistoryButton.addEventListener("click", async () => {
+  const articleMarkdown = articleEditor.value || currentArticleMarkdown;
+  const title = publishTitleInput.value.trim() || currentPublishTitle;
+  const tagsText = publishTagsInput.value.trim();
+  const imagePrompts = extractImagePromptsFromMarkdown(articleMarkdown);
+
+  if (!articleMarkdown.trim()) {
+    publishStatusText.textContent = "업로드할 글이 없습니다.";
+    return;
+  }
+
+  const missingSlots = imagePrompts
+    .map((item, index) => ({ slot: item.slot, file: currentImageFiles[index] || null }))
+    .filter((item) => !item.file)
+    .map((item) => item.slot);
+
+  if (missingSlots.length) {
+    publishStatusText.textContent = `이미지 슬롯 ${missingSlots.join(", ")}에 파일을 연결해 주세요.`;
+    return;
+  }
+
+  uploadToTistoryButton.disabled = true;
+  publishStatusText.textContent = "브라우저를 열어 티스토리 업로드를 진행하고 있습니다. 로그인 화면이 보이면 로그인해 주세요.";
+
+  try {
+    const formData = new FormData();
+    formData.append("article_markdown", articleMarkdown);
+    formData.append("title", title);
+    formData.append("tags", tagsText);
+
+    imagePrompts.forEach((item, index) => {
+      const file = currentImageFiles[index];
+      if (!file) {
+        return;
+      }
+      formData.append("image_slot_numbers", String(item.slot));
+      formData.append("image_files", file, file.name);
+    });
+
+    const response = await fetch("/publish", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await parseResponse(response);
+
+    if (!response.ok) {
+      throw new Error(data.detail || "티스토리 업로드에 실패했습니다.");
+    }
+
+    publishStatusText.textContent = data.post_url
+      ? `업로드를 완료했습니다. 게시 주소: ${data.post_url}`
+      : "티스토리 업로드를 완료했습니다.";
+  } catch (error) {
+    publishStatusText.textContent = error.message;
+  } finally {
+    uploadToTistoryButton.disabled = !articleMarkdown.trim();
+  }
 });
 
 trendModeButton.addEventListener("click", () => {
