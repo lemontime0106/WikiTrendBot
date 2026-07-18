@@ -160,6 +160,10 @@ h1 {
   margin-bottom: 18px;
 }
 
+.custom-context-panel {
+  margin-bottom: 18px;
+}
+
 .mode-tab {
   flex: 1;
   padding: 12px 14px;
@@ -300,6 +304,24 @@ h1 {
   border: 1px solid rgba(95, 72, 47, 0.12);
 }
 
+.publish-section {
+  margin-top: 18px;
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(255, 253, 249, 0.9);
+  border: 1px solid rgba(95, 72, 47, 0.12);
+}
+
+.publish-grid {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.publish-button {
+  margin-top: 16px;
+}
+
 .manual-panel {
   display: flex;
   flex-direction: column;
@@ -321,6 +343,11 @@ h1 {
   font: inherit;
 }
 
+.manual-textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
 .manual-generate-button {
   width: 100%;
   margin-top: 14px;
@@ -334,9 +361,13 @@ h1 {
 
 .support-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   margin-top: 18px;
+}
+
+.support-panel-wide {
+  grid-column: 1 / -1;
 }
 
 .support-panel {
@@ -373,6 +404,69 @@ h1 {
 .support-card-meta {
   color: var(--muted);
   font-size: 0.93rem;
+}
+
+.image-slot-list {
+  display: grid;
+  gap: 12px;
+}
+
+.image-slot-card,
+.image-slot-preview {
+  padding: 16px;
+  border-radius: 16px;
+  background: #fffdf9;
+  border: 1px solid rgba(95, 72, 47, 0.1);
+}
+
+.image-slot-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.image-slot-line,
+.image-slot-file-name {
+  color: var(--muted);
+  font-size: 0.93rem;
+}
+
+.image-slot-prompt {
+  margin-top: 12px;
+  color: var(--text);
+  line-height: 1.7;
+}
+
+.image-slot-upload {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.image-slot-input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid rgba(95, 72, 47, 0.14);
+  border-radius: 14px;
+  background: #fffdfa;
+  color: var(--muted);
+  font: inherit;
+}
+
+.image-slot-preview {
+  margin: 0 0 1em;
+  background: rgba(241, 211, 183, 0.3);
+}
+
+.image-slot-preview-label {
+  margin-bottom: 8px;
+  color: var(--accent-strong);
+  font-size: 0.9rem;
+  font-weight: 700;
 }
 
 .tag-chip-wrap {

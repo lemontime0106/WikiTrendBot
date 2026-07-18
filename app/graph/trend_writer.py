@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import re
 from typing import Any, Optional, TypedDict
 
 import httpx
@@ -15,10 +17,11 @@ from app.service.naver_search import collect_naver_search_context
 
 class TrendWriterState(TypedDict, total=False):
     keyword: Optional[str]
+    user_purpose: str
     search_context: str
     search_results: list[dict[str, str]]
     article_markdown: str
-    product_recommendations: list[str]
+    image_prompts: list[dict[str, str | int]]
     recommended_tags: list[str]
     model: str
 
@@ -50,14 +53,28 @@ async def _openai_chat_completions(
     }
 
     async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            json=payload,
-        )
-        resp.raise_for_status()
+        try:
+            resp = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=payload,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text.strip()
+            if len(detail) > 400:
+                detail = detail[:400].rstrip() + "..."
+            raise RuntimeError(
+                f"LLM API 요청이 실패했습니다. status={exc.response.status_code}, body={detail or '응답 본문 없음'}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"LLM API 연결에 실패했습니다: {exc}") from exc
+
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(f"LLM 응답 형식이 예상과 다릅니다: {data}") from exc
 
 
 def _create_llm_runnable() -> Runnable:
@@ -70,30 +87,48 @@ def _create_llm_runnable() -> Runnable:
 
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
-
-    try:
-        from langchain_openai import ChatOpenAI  # type: ignore
-
-        return ChatOpenAI(model=model, temperature=temperature)
-    except Exception:
-        pass
-
-    try:
-        from langchain.chat_models import ChatOpenAI  # type: ignore
-
-        return ChatOpenAI(model_name=model, temperature=temperature)
-    except Exception:
-        pass
-
     api_key = os.getenv("OPENAI_API_KEY")
+    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    normalized_base_url = base_url.rstrip("/")
+    use_rest_fallback = normalized_base_url != "https://api.openai.com/v1"
+
+    if not use_rest_fallback:
+        try:
+            from langchain_openai import ChatOpenAI  # type: ignore
+
+            return ChatOpenAI(
+                model=model,
+                temperature=temperature,
+                api_key=api_key,
+                base_url=normalized_base_url,
+            )
+        except Exception:
+            pass
+
+        try:
+            from langchain.chat_models import ChatOpenAI  # type: ignore
+
+            return ChatOpenAI(
+                model_name=model,
+                temperature=temperature,
+                openai_api_key=api_key,
+            )
+        except Exception:
+            pass
+
     if not api_key:
         raise RuntimeError(
             "LLM 설정이 필요합니다. (1) langchain_openai 설치 또는 (2) OPENAI_API_KEY 환경변수를 설정하세요."
         )
 
-    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-
     class _OpenAIRestRunnable(Runnable):
+        def invoke(self, input: Any, config: Any | None = None, **kwargs: Any) -> Any:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(self.ainvoke(input, config=config, **kwargs))
+            raise RuntimeError("실행 중인 이벤트 루프에서는 invoke 대신 ainvoke를 사용해야 합니다.")
+
         async def ainvoke(self, input: Any, config: Any | None = None, **kwargs: Any) -> Any:
             if isinstance(input, list) and all(isinstance(m, BaseMessage) for m in input):
                 messages = input
@@ -102,7 +137,7 @@ def _create_llm_runnable() -> Runnable:
             text = await _openai_chat_completions(
                 api_key=api_key,
                 model=model,
-                base_url=base_url,
+                base_url=normalized_base_url,
                 temperature=temperature,
                 messages=messages,
             )
@@ -126,6 +161,27 @@ def _normalize_tistory_text(content: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _extract_image_prompts(content: str) -> list[dict[str, str | int]]:
+    pattern = re.compile(r"^\[여기에 들어갈 이미지 생성 프롬프트:\s*(.+?)\]\s*$")
+    image_prompts: list[dict[str, str | int]] = []
+
+    for line_index, raw_line in enumerate(content.splitlines(), start=1):
+        match = pattern.match(raw_line.strip())
+        if not match:
+            continue
+        prompt = match.group(1).strip()
+        image_prompts.append(
+            {
+                "slot": len(image_prompts) + 1,
+                "prompt": prompt,
+                "placeholder": raw_line.strip(),
+                "line": line_index,
+            }
+        )
+
+    return image_prompts
+
+
 async def node_collect_search_context(state: TrendWriterState) -> TrendWriterState:
     keyword = (state.get("keyword") or "").strip()
     if not keyword:
@@ -142,6 +198,7 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
     keyword = (state.get("keyword") or "").strip()
     if not keyword:
         raise RuntimeError("글 생성을 위한 키워드가 필요합니다.")
+    user_purpose = (state.get("user_purpose") or "").strip()
     search_context = (state.get("search_context") or "").strip()
     if not search_context:
         raise RuntimeError("네이버 검색 컨텍스트를 가져오지 못했습니다.")
@@ -151,18 +208,24 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
             (
                 "system",
                 "너는 한국어 블로그 에디터다. 제공된 검색 결과를 우선 근거로 삼아 자연스럽고 읽기 쉬운 정보형 블로그 글을 작성한다. "
-                "과장되거나 확인 불가능한 허위 사실은 만들지 않으며, 키워드가 약어이거나 중의적이면 검색 결과에 나타난 실제 맥락을 최우선으로 따른다.",
+                "과장되거나 확인 불가능한 허위 사실은 만들지 않으며, 키워드가 약어이거나 중의적이면 검색 결과에 나타난 실제 맥락을 최우선으로 따른다. "
+                "문장 길이, 리듬, 연결 표현, 서술 방식이 매 단락 비슷하게 반복되지 않도록 사람 손글처럼 변주를 준다.",
             ),
             (
                 "user",
                 "아래 키워드와 네이버 검색 요약을 바탕으로 실제 블로그에 올릴 만한 글(마크다운)을 작성해줘.\n\n"
                 "키워드: {keyword}\n\n"
+                "사용자 목적/원하는 방향:\n{user_purpose}\n\n"
                 "네이버 검색 요약:\n{search_context}\n\n"
                 "요구사항:\n"
                 "- 제목 1개(H1), 본문 소제목은 H2/H3까지만 사용\n"
                 "- 도입은 검색 유입을 고려한 블로그 문체로 작성\n"
                 "- 본문은 H2 소제목 3~4개로 구성\n"
+                "- 전체 분량은 공백 포함 최소 1000자 이상으로 작성하고, 내용이 얕아 보이지 않도록 충분히 설명\n"
                 "- 내용은 검색 결과에 나온 현재 이슈와 맥락을 우선 반영\n"
+                "- 주제의 배경, 핵심 쟁점, 의미를 연결해 전문성 있어 보이는 분석형 문장으로 작성\n"
+                "- 흔한 요약문처럼 쓰지 말고, 검색 요약을 바탕으로 독창적인 관점과 해석을 더할 것\n"
+                "- 사용자 목적이 비어 있지 않다면 글의 각도, 강조 포인트, 독자 대상에 자연스럽게 반영\n"
                 "- 검색 결과에 보이는 주제와 다르게 임의 해석하지 말 것\n"
                 "- WBC 같은 약어는 검색 결과가 가리키는 실제 주제를 따라 쓸 것\n"
                 "- 검색 요약에 없는 세부 숫자, 일정, 규정, 전적, 인용문은 추측해서 쓰지 말 것\n"
@@ -170,18 +233,30 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
                 "- 글 안에 쿠팡, 쇼핑, 구매 유도 문구를 넣지 말 것\n"
                 "- 티스토리용이므로 **굵게**, __강조__, 표, 코드블록 같은 마크다운 문법은 쓰지 말 것\n"
                 "- 본문은 일반 문장과 줄바꿈 위주로 쓰고, 헤더 문법만 최소한으로 사용\n"
+                "- 블로그 실제 게시를 고려해 본문 중간에 이미지 자리표시자를 최대 2개까지만 삽입\n"
+                "- 이미지 자리표시자는 반드시 한 줄 단독으로 [여기에 들어갈 이미지 생성 프롬프트: ...] 형식으로 작성\n"
+                "- 이미지 자리표시자가 꼭 필요하지 않은 글이면 1개만 넣어도 되며, 2개를 초과하면 안 됨\n"
+                "- 각 이미지 프롬프트에는 장면 설명, 분위기, 구도, 조명, 사실적인 스타일 여부를 구체적으로 포함\n"
+                "- 이미지 자리표시자는 관련 단락 바로 아래에 배치하고, 글 흐름을 끊지 않도록 자연스럽게 넣을 것\n"
                 "- 내용은 개념 소개, 왜 지금 주목받는지, 알아둘 포인트를 포함\n"
                 "- 결론에는 독자 행동을 유도하는 마무리 문장 포함\n"
                 "- 마지막에 '오늘의 한줄 요약' 1줄\n"
                 "- 전체 톤은 정보형 블로그 문체\n"
                 "- 이모지 없이 깔끔한 문장으로 작성\n"
-                "- 1200~1800자 정도\n",
+                "- 단락마다 같은 문장 길이, 같은 접속어, 같은 어미를 반복하지 말 것\n"
+                "- 설명형 단락, 짧은 환기 문장, 정리형 문장을 섞어 호흡을 다양하게 만들 것\n"
+                "- 권장 분량은 1200~1800자이며, 어떤 경우에도 1000자 미만으로 끝내지 말 것\n",
             ),
         ]
     )
 
     llm = _create_llm_runnable()
-    messages = prompt.format_messages(keyword=keyword, search_context=search_context)
+    purpose_text = user_purpose if user_purpose else "별도 요청 없음"
+    messages = prompt.format_messages(
+        keyword=keyword,
+        user_purpose=purpose_text,
+        search_context=search_context,
+    )
 
     result = await llm.ainvoke(messages)
     content = getattr(result, "content", None)
@@ -190,60 +265,13 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
 
     return {
         "article_markdown": _normalize_tistory_text(content),
+        "image_prompts": _extract_image_prompts(content),
         "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
     }
 
-
-async def node_recommend_products(state: TrendWriterState) -> TrendWriterState:
-    keyword = (state.get("keyword") or "").strip()
-    search_context = (state.get("search_context") or "").strip()
-    if not keyword or not search_context:
-        raise RuntimeError("상품 추천을 위한 키워드 또는 검색 컨텍스트가 없습니다.")
-
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                "너는 콘텐츠 운영자를 돕는 추천 도우미다. 글 본문과 별도로 보여줄 수 있는 연관 상품 아이디어를 간결하게 제안한다.",
-            ),
-            (
-                "user",
-                "아래 키워드와 검색 요약을 바탕으로, 사용자가 별도 추천 영역에서 볼 만한 상품 아이디어 3개를 JSON 배열 문자열로 작성해줘.\n\n"
-                "키워드: {keyword}\n\n"
-                "검색 요약:\n{search_context}\n\n"
-                "규칙:\n"
-                '- 결과는 반드시 JSON 배열 문자열 형식 예시 ["상품1", "상품2", "상품3"]\n'
-                "- 각 항목은 25자 안팎의 짧은 상품명 형태\n"
-                "- 글 본문에 들어갈 문장 말고 상품 아이디어만 작성\n"
-                "- 억지 추천은 피하고 실제로 연관성이 있는 물건으로 작성\n",
-            ),
-        ]
-    )
-
-    llm = _create_llm_runnable()
-    messages = prompt.format_messages(keyword=keyword, search_context=search_context)
-    result = await llm.ainvoke(messages)
-    content = getattr(result, "content", None)
-    if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("상품 추천 응답이 비어있습니다.")
-
-    cleaned = content.strip()
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError:
-        parsed = [
-            line.strip("- ").strip()
-            for line in cleaned.splitlines()
-            if line.strip()
-        ]
-
-    recommendations = [item for item in parsed if isinstance(item, str) and item.strip()]
-
-    return {"product_recommendations": recommendations[:3]}
-
-
 async def node_recommend_tags(state: TrendWriterState) -> TrendWriterState:
     keyword = (state.get("keyword") or "").strip()
+    user_purpose = (state.get("user_purpose") or "").strip()
     search_context = (state.get("search_context") or "").strip()
     if not keyword or not search_context:
         raise RuntimeError("태그 추천을 위한 키워드 또는 검색 컨텍스트가 없습니다.")
@@ -258,6 +286,7 @@ async def node_recommend_tags(state: TrendWriterState) -> TrendWriterState:
                 "user",
                 "아래 키워드와 검색 요약을 바탕으로 티스토리 태그를 최소 10개 추천해줘.\n\n"
                 "키워드: {keyword}\n\n"
+                "사용자 목적/원하는 방향:\n{user_purpose}\n\n"
                 "검색 요약:\n{search_context}\n\n"
                 "규칙:\n"
                 '- 결과는 반드시 JSON 배열 문자열 형식 예시 ["태그1", "태그2"]\n'
@@ -269,7 +298,12 @@ async def node_recommend_tags(state: TrendWriterState) -> TrendWriterState:
     )
 
     llm = _create_llm_runnable()
-    messages = prompt.format_messages(keyword=keyword, search_context=search_context)
+    purpose_text = user_purpose if user_purpose else "별도 요청 없음"
+    messages = prompt.format_messages(
+        keyword=keyword,
+        user_purpose=purpose_text,
+        search_context=search_context,
+    )
     result = await llm.ainvoke(messages)
     content = getattr(result, "content", None)
     if not isinstance(content, str) or not content.strip():
@@ -303,21 +337,19 @@ def build_trend_writer_graph() -> Any:
     g = StateGraph(TrendWriterState)
     g.add_node("collect_search_context", node_collect_search_context)
     g.add_node("generate_article", node_generate_article)
-    g.add_node("recommend_products", node_recommend_products)
     g.add_node("recommend_tags", node_recommend_tags)
 
     g.set_entry_point("collect_search_context")
     g.add_edge("collect_search_context", "generate_article")
-    g.add_edge("generate_article", "recommend_products")
-    g.add_edge("recommend_products", "recommend_tags")
+    g.add_edge("generate_article", "recommend_tags")
     g.add_edge("recommend_tags", END)
 
     return g.compile()
 
 
-async def run_trend_writer(*, keyword: Optional[str] = None) -> TrendWriterState:
+async def run_trend_writer(*, keyword: Optional[str] = None, user_purpose: Optional[str] = None) -> TrendWriterState:
     graph = build_trend_writer_graph()
-    init_state: TrendWriterState = {"keyword": keyword}
+    init_state: TrendWriterState = {"keyword": keyword, "user_purpose": (user_purpose or "").strip()}
     out: TrendWriterState = await graph.ainvoke(init_state)
     return out
 
