@@ -13,9 +13,9 @@
   <main class="page-shell">
     <section class="hero-card">
       <p class="eyebrow">WikiTrendBot</p>
-      <h1>실시간 키워드 10개를 보고, 원하는 주제로 바로 글을 생성하세요.</h1>
+      <h1>트렌드를 좇기 전에, 발행할 가치가 있는 AI·IT 글인지 먼저 검증하세요.</h1>
       <p class="hero-copy">
-        나무위키 트렌드에서 고르거나 직접 키워드를 입력해서 티스토리용 글과 검색 태그를 한 번에 준비할 수 있습니다.
+        AI·IT 주제를 조사하고, 출처·중복·사실 근거·독자 효용 품질 검사를 통과한 글만 티스토리에 올립니다.
       </p>
       <div class="hero-actions">
         <button id="loadTrendsButton" class="primary-button">키워드 10개 불러오기</button>
@@ -31,8 +31,12 @@
             <span class="badge subtle">공통 반영</span>
           </div>
           <label class="manual-label" for="userPurposeInput">사용자 목적 / 원하는 글 방향</label>
-          <textarea id="userPurposeInput" class="manual-input manual-textarea" placeholder="예: 티스토리 유입형으로 써줘, 초보자도 이해하기 쉽게 써줘, 팬 반응 중심으로 정리해줘"></textarea>
-          <p class="manual-help">트렌드 선택과 직접 입력 모두 이 내용을 함께 반영합니다.</p>
+          <textarea id="userPurposeInput" class="manual-input manual-textarea compact-textarea" placeholder="예: 소규모 개발팀이 AI 코드 리뷰 도구를 고를 수 있도록 비교 기준을 정리해줘"></textarea>
+          <label class="manual-label field-spacing" for="firsthandNotesInput">직접 경험·검증 메모</label>
+          <textarea id="firsthandNotesInput" class="manual-input manual-textarea" placeholder="직접 사용한 환경, 기간, 버전, 측정 결과, 실패 사례를 적어주세요. 리뷰·추천·직접 비교 글에는 80자 이상 필요합니다."></textarea>
+          <label class="manual-label field-spacing" for="sourceUrlsInput">추가 공식 출처 URL</label>
+          <textarea id="sourceUrlsInput" class="manual-input manual-textarea compact-textarea" placeholder="공식 문서 URL을 한 줄에 하나씩 입력하세요."></textarea>
+          <p class="manual-help">트렌드 선택과 직접 입력 모두에 반영되며, 근거가 부족한 주제는 생성 단계에서 차단됩니다.</p>
         </section>
 
         <div class="mode-tabs">
@@ -56,9 +60,9 @@
             <span class="badge subtle">수동 생성</span>
           </div>
           <label class="manual-label" for="manualKeywordInput">작성할 키워드</label>
-          <input id="manualKeywordInput" class="manual-input" type="text" placeholder="예: WBC, 손흥민, 챔피언스리그">
+          <input id="manualKeywordInput" class="manual-input" type="text" placeholder="예: AI 에이전트 관측성 도입 기준">
           <button id="manualGenerateButton" class="primary-button manual-generate-button" type="button">이 키워드로 글 생성</button>
-          <p class="manual-help">입력한 키워드로 네이버 검색 요약을 수집한 뒤 글을 생성합니다.</p>
+          <p class="manual-help">검색 결과와 추가한 공식 자료의 본문을 조사한 뒤, 사이트 주제와 근거가 충분할 때만 글을 생성합니다.</p>
         </section>
       </section>
 
@@ -72,6 +76,7 @@
           <button id="copyArticleButton" class="secondary-button" type="button" disabled>글 복사</button>
           <button id="copyTagsButton" class="secondary-button" type="button" disabled>태그 복사</button>
           <button id="toggleEditButton" class="secondary-button" type="button" disabled>수정하기</button>
+          <button id="qualityCheckButton" class="secondary-button" type="button" disabled>품질 다시 검사</button>
           <span id="copyStatusText" class="toolbar-status">생성 후 복사와 수정이 가능합니다.</span>
         </div>
         <article id="articleOutput" class="article-output empty-state">
@@ -93,18 +98,27 @@
             <label class="manual-label" for="publishTitleInput">업로드 제목</label>
             <input id="publishTitleInput" class="manual-input" type="text" placeholder="글 생성 후 자동으로 채워집니다.">
             <label class="manual-label" for="publishTagsInput">태그</label>
-            <input id="publishTagsInput" class="manual-input" type="text" placeholder="예: 손흥민, 축구, 프리미어리그">
+            <input id="publishTagsInput" class="manual-input" type="text" placeholder="예: AI 에이전트, 관측성, 업무 자동화">
           </div>
           <button id="uploadToTistoryButton" class="primary-button publish-button" type="button" disabled>티스토리 업로드 시작</button>
           <p id="publishStatusText" class="manual-help">`TISTORY_BLOG_URL`에 설정된 블로그로 업로드합니다. 글 생성 후 제목, 태그, 이미지 파일을 확인한 다음 진행하세요.</p>
         </section>
         <section class="support-grid">
+          <section class="support-panel support-panel-wide">
+            <div class="editor-heading">
+              <h3>발행 품질 게이트</h3>
+              <span id="qualityScoreBadge" class="badge subtle">검사 전</span>
+            </div>
+            <div id="qualityReportList" class="support-list empty-state">
+              글을 생성하면 출처·직접 경험·중복·편집 품질 검사 결과가 표시됩니다.
+            </div>
+          </section>
           <section class="support-panel">
             <div class="editor-heading">
               <h3>검색 참고 요약</h3>
             </div>
             <div id="searchContextList" class="support-list empty-state">
-              글 생성 시 네이버 검색 요약이 여기에 표시됩니다.
+              글 생성 시 조사에 사용한 원문과 검색 요약이 여기에 표시됩니다.
             </div>
           </section>
           <section class="support-panel">
@@ -112,7 +126,7 @@
               <h3>추천 태그</h3>
             </div>
             <div id="tagList" class="support-list empty-state">
-              검색 유입용 태그가 여기에 표시됩니다.
+              본문에 실제로 등장하는 핵심 태그가 여기에 표시됩니다.
             </div>
           </section>
           <section class="support-panel support-panel-wide">

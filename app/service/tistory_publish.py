@@ -55,6 +55,7 @@ MANAGE_PATH_CANDIDATES = [
 ]
 
 IMAGE_PROMPT_PATTERN = re.compile(r"^\[여기에 들어갈 이미지 생성 프롬프트:\s*(.+?)\]\s*$")
+MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
 LOGIN_ID_SELECTORS = [
     "input[name='loginId']",
     "input[name='email']",
@@ -109,6 +110,7 @@ def _expected_body_text(body_markdown: str) -> str:
             stripped = stripped[2:].strip()
         elif stripped.startswith("- "):
             stripped = stripped[2:].strip()
+        stripped = MARKDOWN_LINK_PATTERN.sub(r"\1", stripped)
         if stripped:
             lines.append(stripped)
     return _normalize_editor_text(" ".join(lines))
@@ -132,6 +134,21 @@ def _extract_title(markdown: str, fallback_title: str) -> tuple[str, str]:
         raise RuntimeError("업로드할 제목을 찾지 못했습니다.")
 
     return title, "\n".join(body_lines).strip()
+
+
+def _inline_markdown_to_html(value: str) -> str:
+    chunks: list[str] = []
+    cursor = 0
+    for match in MARKDOWN_LINK_PATTERN.finditer(value):
+        chunks.append(html.escape(value[cursor : match.start()]))
+        label = html.escape(match.group(1).strip())
+        url = html.escape(match.group(2).strip(), quote=True)
+        chunks.append(
+            f'<a href="{url}" target="_blank" rel="noopener noreferrer">{label}</a>'
+        )
+        cursor = match.end()
+    chunks.append(html.escape(value[cursor:]))
+    return "".join(chunks)
 
 
 def _markdown_body_to_html(body_markdown: str) -> str:
@@ -176,33 +193,31 @@ def _markdown_body_to_html(body_markdown: str) -> str:
             )
             continue
 
-        escaped = html.escape(stripped)
-
         if stripped.startswith("### "):
             flush_paragraph()
             flush_list()
-            chunks.append(f"<h3>{html.escape(stripped[4:].strip())}</h3>")
+            chunks.append(f"<h3>{_inline_markdown_to_html(stripped[4:].strip())}</h3>")
             continue
 
         if stripped.startswith("## "):
             flush_paragraph()
             flush_list()
-            chunks.append(f"<h2>{html.escape(stripped[3:].strip())}</h2>")
+            chunks.append(f"<h2>{_inline_markdown_to_html(stripped[3:].strip())}</h2>")
             continue
 
         if stripped.startswith("# "):
             flush_paragraph()
             flush_list()
-            chunks.append(f"<h1>{html.escape(stripped[2:].strip())}</h1>")
+            chunks.append(f"<h1>{_inline_markdown_to_html(stripped[2:].strip())}</h1>")
             continue
 
         if stripped.startswith("- "):
             flush_paragraph()
-            list_items.append(html.escape(stripped[2:].strip()))
+            list_items.append(_inline_markdown_to_html(stripped[2:].strip()))
             continue
 
         flush_list()
-        paragraph.append(escaped)
+        paragraph.append(_inline_markdown_to_html(stripped))
 
     flush_paragraph()
     flush_list()

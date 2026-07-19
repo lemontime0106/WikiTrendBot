@@ -11,10 +11,16 @@ if sys.platform.startswith("win"):
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.staticfiles import StaticFiles
 from app.service.get_trend import get_trend_data
-from app.graph.trend_writer import run_trend_writer
+from app.graph.trend_writer import (
+    ContentRejectedError,
+    review_edited_article,
+    run_trend_writer,
+)
+from app.service.approval_store import approve_article, get_article_approval
+from app.service.content_quality import QualityReport
 from app.service.tistory_publish import publish_to_tistory
 
 load_dotenv()
@@ -27,6 +33,13 @@ STATIC_DIR = BASE_DIR / "static"
 class GenerateRequest(BaseModel):
     keyword: str
     user_purpose: str | None = None
+    firsthand_notes: str | None = None
+    source_urls: list[str] = Field(default_factory=list)
+
+
+class QualityCheckRequest(BaseModel):
+    article_markdown: str
+    firsthand_notes: str | None = None
 
 
 if STATIC_DIR.exists():
@@ -63,16 +76,27 @@ async def generate(keyword: str | None = None, user_purpose: str | None = None):
         raise HTTPException(status_code=400, detail="keyword 쿼리가 필요합니다.")
     try:
         out = await run_trend_writer(keyword=keyword, user_purpose=user_purpose)
+    except ContentRejectedError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"글 생성에 실패했습니다: {exc}") from exc
+    article_markdown = out.get("article_markdown") or ""
+    quality_data = out.get("quality_report") or {}
+    if article_markdown and quality_data:
+        report = QualityReport.model_validate(quality_data)
+        approve_article(article_markdown, report)
     return {
         "selected_keyword": keyword.strip(),
         "user_purpose": (user_purpose or "").strip(),
         "model": out.get("model"),
+        "reviewer_model": out.get("reviewer_model"),
         "search_results": out.get("search_results", []),
-        "article_markdown": out.get("article_markdown"),
+        "article_plan": out.get("article_plan", {}),
+        "article_markdown": article_markdown,
         "image_prompts": out.get("image_prompts", []),
         "recommended_tags": out.get("recommended_tags", []),
+        "quality_report": quality_data,
+        "revision_count": out.get("revision_count", 0),
     }
 
 
@@ -84,18 +108,50 @@ async def generate_from_selection(payload: GenerateRequest):
         raise HTTPException(status_code=400, detail="keyword 값이 비어 있습니다.")
 
     try:
-        out = await run_trend_writer(keyword=keyword, user_purpose=user_purpose)
+        out = await run_trend_writer(
+            keyword=keyword,
+            user_purpose=user_purpose,
+            firsthand_notes=payload.firsthand_notes,
+            source_urls=payload.source_urls,
+        )
+    except ContentRejectedError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"글 생성에 실패했습니다: {exc}") from exc
+    article_markdown = out.get("article_markdown") or ""
+    quality_data = out.get("quality_report") or {}
+    if article_markdown and quality_data:
+        report = QualityReport.model_validate(quality_data)
+        approve_article(article_markdown, report)
     return {
         "selected_keyword": keyword,
         "user_purpose": user_purpose,
         "model": out.get("model"),
+        "reviewer_model": out.get("reviewer_model"),
         "search_results": out.get("search_results", []),
-        "article_markdown": out.get("article_markdown"),
+        "article_plan": out.get("article_plan", {}),
+        "article_markdown": article_markdown,
         "image_prompts": out.get("image_prompts", []),
         "recommended_tags": out.get("recommended_tags", []),
+        "quality_report": quality_data,
+        "revision_count": out.get("revision_count", 0),
     }
+
+
+@app.post("/quality-check")
+async def quality_check(payload: QualityCheckRequest):
+    article_markdown = payload.article_markdown.strip()
+    if not article_markdown:
+        raise HTTPException(status_code=400, detail="검사할 본문이 비어 있습니다.")
+    try:
+        report = await review_edited_article(
+            article_markdown=article_markdown,
+            firsthand_notes=(payload.firsthand_notes or "").strip(),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"품질 검사에 실패했습니다: {exc}") from exc
+    approve_article(article_markdown, report)
+    return report.model_dump()
 
 
 @app.post("/publish")
@@ -108,6 +164,13 @@ async def publish_post(
 ):
     if not article_markdown.strip():
         raise HTTPException(status_code=400, detail="업로드할 본문이 비어 있습니다.")
+
+    approval = get_article_approval(article_markdown)
+    if approval is None or not approval.passed:
+        raise HTTPException(
+            status_code=400,
+            detail="현재 본문은 품질 검사를 통과하지 않았습니다. 생성 또는 수정 후 품질 검사를 다시 실행하세요.",
+        )
 
     blog_url = (os.getenv("TISTORY_BLOG_URL") or "").strip()
     if not blog_url:

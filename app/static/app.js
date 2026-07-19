@@ -26,6 +26,11 @@ const publishStatusText = document.getElementById("publishStatusText");
 const manualKeywordInput = document.getElementById("manualKeywordInput");
 const manualGenerateButton = document.getElementById("manualGenerateButton");
 const userPurposeInput = document.getElementById("userPurposeInput");
+const firsthandNotesInput = document.getElementById("firsthandNotesInput");
+const sourceUrlsInput = document.getElementById("sourceUrlsInput");
+const qualityCheckButton = document.getElementById("qualityCheckButton");
+const qualityScoreBadge = document.getElementById("qualityScoreBadge");
+const qualityReportList = document.getElementById("qualityReportList");
 
 let selectedKeyword = "";
 let currentArticleMarkdown = "";
@@ -35,14 +40,36 @@ let currentImageFiles = [];
 let currentPublishTitle = "";
 let isEditMode = false;
 let currentMode = "trend";
+let currentQualityPassed = false;
 
 const IMAGE_PROMPT_PATTERN = /^\[여기에 들어갈 이미지 생성 프롬프트:\s*(.+?)\]\s*$/;
 
 function escapeHtml(value) {
-  return value
+  return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value).replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+
+function renderInlineMarkdown(value) {
+  const pattern = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+  const chunks = [];
+  let cursor = 0;
+  let match;
+
+  while ((match = pattern.exec(value)) !== null) {
+    chunks.push(escapeHtml(value.slice(cursor, match.index)));
+    chunks.push(
+      `<a href="${escapeAttribute(match[2])}" target="_blank" rel="noopener noreferrer">${escapeHtml(match[1])}</a>`
+    );
+    cursor = match.index + match[0].length;
+  }
+  chunks.push(escapeHtml(value.slice(cursor)));
+  return chunks.join("");
 }
 
 function renderMarkdown(markdown) {
@@ -69,7 +96,7 @@ function renderMarkdown(markdown) {
   };
 
   lines.forEach((rawLine) => {
-    const line = escapeHtml(rawLine.trim());
+    const line = rawLine.trim();
 
     if (!line) {
       flushParagraph();
@@ -94,32 +121,32 @@ function renderMarkdown(markdown) {
     if (line.startsWith("### ")) {
       flushParagraph();
       flushList();
-      blocks.push(`<h3>${line.slice(4)}</h3>`);
+      blocks.push(`<h3>${renderInlineMarkdown(line.slice(4))}</h3>`);
       return;
     }
 
     if (line.startsWith("## ")) {
       flushParagraph();
       flushList();
-      blocks.push(`<h2>${line.slice(3)}</h2>`);
+      blocks.push(`<h2>${renderInlineMarkdown(line.slice(3))}</h2>`);
       return;
     }
 
     if (line.startsWith("# ")) {
       flushParagraph();
       flushList();
-      blocks.push(`<h1>${line.slice(2)}</h1>`);
+      blocks.push(`<h1>${renderInlineMarkdown(line.slice(2))}</h1>`);
       return;
     }
 
     if (line.startsWith("- ")) {
       flushParagraph();
-      listItems.push(line.slice(2));
+      listItems.push(renderInlineMarkdown(line.slice(2)));
       return;
     }
 
     flushList();
-    paragraph.push(line);
+    paragraph.push(renderInlineMarkdown(line));
   });
 
   flushParagraph();
@@ -176,15 +203,77 @@ function renderSearchResults(items) {
       const title = escapeHtml(item.title || "");
       const snippet = escapeHtml(item.snippet || "");
       const source = escapeHtml(item.source || "");
+      const url = typeof item.url === "string" ? item.url.trim() : "";
+      const link = url
+        ? `<a class="support-card-link" href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer">원문 확인</a>`
+        : "";
       return `
         <article class="support-card">
           <strong class="support-card-title">${title}</strong>
           <div>${snippet || "요약 없음"}</div>
-          <div class="support-card-meta">${source || "출처 정보 없음"}</div>
+          <div class="support-card-meta">${source || "출처 정보 없음"} ${link}</div>
         </article>
       `;
     })
     .join("");
+}
+
+function renderQualityReport(report, invalidationMessage = "") {
+  const checks = Array.isArray(report?.checks) ? report.checks : [];
+  currentQualityPassed = Boolean(report?.passed);
+  qualityScoreBadge.className = `badge ${
+    currentQualityPassed ? "quality-pass" : checks.length ? "quality-fail" : "subtle"
+  }`;
+  qualityScoreBadge.textContent = checks.length
+    ? `${currentQualityPassed ? "통과" : "차단"} ${Number(report.score || 0)}점`
+    : "검사 전";
+
+  if (!checks.length) {
+    qualityReportList.className = "support-list empty-state";
+    qualityReportList.textContent =
+      invalidationMessage ||
+      "글을 생성하면 출처·직접 경험·중복·편집 품질 검사 결과가 표시됩니다.";
+    updatePublishForm({
+      markdown: articleEditor.value || currentArticleMarkdown,
+      tags: currentTags,
+      keepUserTitle: true,
+    });
+    return;
+  }
+
+  const reasons = Array.isArray(report.blocking_reasons)
+    ? report.blocking_reasons
+    : [];
+  qualityReportList.className = "support-list quality-report-list";
+  qualityReportList.innerHTML = `
+    ${
+      reasons.length
+        ? `<div class="quality-blocking-summary"><strong>발행 차단 사유</strong>${reasons
+            .map((reason) => `<div>• ${escapeHtml(reason)}</div>`)
+            .join("")}</div>`
+        : '<div class="quality-success-summary">필수 품질 기준을 모두 통과했습니다.</div>'
+    }
+    <div class="quality-check-grid">
+      ${checks
+        .map(
+          (check) => `
+            <article class="quality-check-card ${check.passed ? "is-pass" : "is-fail"}">
+              <div class="quality-check-heading">
+                <strong>${escapeHtml(check.label || check.code || "품질 항목")}</strong>
+                <span>${check.passed ? "통과" : check.blocking ? "차단" : "경고"}</span>
+              </div>
+              <div>${escapeHtml(check.detail || "")}</div>
+            </article>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+  updatePublishForm({
+    markdown: articleEditor.value || currentArticleMarkdown,
+    tags: currentTags,
+    keepUserTitle: true,
+  });
 }
 
 function renderRecommendedTags(items) {
@@ -225,10 +314,15 @@ function updatePublishForm({ markdown, tags, keepUserTitle = false }) {
   }
 
   const hasArticle = Boolean((markdown || "").trim());
-  uploadToTistoryButton.disabled = !hasArticle;
+  qualityCheckButton.disabled = !hasArticle;
+  uploadToTistoryButton.disabled = !hasArticle || !currentQualityPassed;
 
   if (!hasArticle) {
-    publishStatusText.textContent = "글 생성 후 제목, 태그, 이미지 파일을 확인한 다음 업로드할 수 있습니다.";
+    publishStatusText.textContent =
+      "글 생성 후 제목, 태그, 이미지 파일을 확인한 다음 업로드할 수 있습니다.";
+  } else if (!currentQualityPassed) {
+    publishStatusText.textContent =
+      "현재 본문은 품질 검사를 통과하지 않았습니다. 차단 사유를 수정한 뒤 다시 검사하세요.";
   }
 }
 
@@ -370,6 +464,7 @@ function setArticleLoading(keyword) {
   renderSearchResults([]);
   renderRecommendedTags([]);
   renderImagePrompts([]);
+  renderQualityReport(null);
   updatePublishForm({ markdown: "", tags: [] });
   closeEditor();
   setToolbarState({
@@ -430,6 +525,7 @@ async function loadTrends() {
   renderSearchResults([]);
   renderRecommendedTags([]);
   renderImagePrompts([]);
+  renderQualityReport(null);
   updatePublishForm({ markdown: "", tags: [] });
   closeEditor();
   setToolbarState({
@@ -461,6 +557,11 @@ async function loadTrends() {
 
 async function generateArticle(keyword) {
   const userPurpose = userPurposeInput.value.trim();
+  const firsthandNotes = firsthandNotesInput.value.trim();
+  const sourceUrls = sourceUrlsInput.value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
   setArticleLoading(keyword);
   setStatus(`"${keyword}" 키워드로 글을 생성하고 있습니다.`);
   manualGenerateButton.disabled = true;
@@ -471,7 +572,12 @@ async function generateArticle(keyword) {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ keyword, user_purpose: userPurpose }),
+      body: JSON.stringify({
+        keyword,
+        user_purpose: userPurpose,
+        firsthand_notes: firsthandNotes,
+        source_urls: sourceUrls,
+      }),
     });
     const data = await parseResponse(response);
 
@@ -480,14 +586,18 @@ async function generateArticle(keyword) {
     }
 
     modelBadge.textContent = data.model || "모델 정보 없음";
+    const revisionText = Number(data.revision_count || 0)
+      ? ` / 자동 수정 ${data.revision_count}회`
+      : "";
     articleMeta.textContent = data.user_purpose
-      ? `선택 키워드: ${data.selected_keyword} / 사용자 목적 반영 완료`
-      : `선택 키워드: ${data.selected_keyword}`;
+      ? `선택 키워드: ${data.selected_keyword} / 사용자 목적 반영 완료${revisionText}`
+      : `선택 키워드: ${data.selected_keyword}${revisionText}`;
     articleOutput.className = "article-output";
     syncEditor(data.article_markdown || "");
     articleOutput.innerHTML = renderMarkdown(currentArticleMarkdown);
     renderSearchResults(data.search_results || []);
     renderRecommendedTags(data.recommended_tags || []);
+    renderQualityReport(data.quality_report || null);
     updatePublishForm({ markdown: data.article_markdown || "", tags: data.recommended_tags || [] });
     const imagePrompts = Array.isArray(data.image_prompts) && data.image_prompts.length
       ? data.image_prompts.map(normalizeImagePromptItem).filter(Boolean)
@@ -496,7 +606,9 @@ async function generateArticle(keyword) {
     setToolbarState({
       copyDisabled: false,
       editDisabled: false,
-      message: "생성된 글을 복사하거나 바로 수정할 수 있습니다.",
+      message: currentQualityPassed
+        ? "품질 검사를 통과했습니다. 최종 내용을 직접 확인하세요."
+        : "발행 차단 사유를 확인하고 글을 수정한 뒤 다시 검사하세요.",
     });
     setStatus(`"${keyword}" 키워드 글 생성을 마쳤습니다.`);
   } catch (error) {
@@ -507,6 +619,7 @@ async function generateArticle(keyword) {
     renderSearchResults([]);
     renderRecommendedTags([]);
     renderImagePrompts([]);
+    renderQualityReport(null);
     updatePublishForm({ markdown: "", tags: [] });
     closeEditor();
     setToolbarState({
@@ -570,8 +683,58 @@ previewArticleButton.addEventListener("click", () => {
   articleOutput.className = "article-output";
   articleOutput.innerHTML = renderMarkdown(currentArticleMarkdown);
   renderImagePrompts(extractImagePromptsFromMarkdown(currentArticleMarkdown));
+  renderQualityReport(null, "본문이 수정되어 기존 승인이 취소됐습니다. 품질 검사를 다시 실행하세요.");
   updatePublishForm({ markdown: currentArticleMarkdown, tags: currentTags, keepUserTitle: true });
-  copyStatusText.textContent = "수정한 내용을 미리보기에 반영했습니다.";
+  copyStatusText.textContent = "수정 내용을 반영했습니다. 발행 전 품질 검사를 다시 실행하세요.";
+});
+
+articleEditor.addEventListener("input", () => {
+  if (!currentQualityPassed) {
+    return;
+  }
+  renderQualityReport(
+    null,
+    "본문이 수정되어 기존 승인이 취소됐습니다. 품질 검사를 다시 실행하세요."
+  );
+  copyStatusText.textContent = "본문이 변경됐습니다. 발행 전 품질 검사를 다시 실행하세요.";
+});
+
+qualityCheckButton.addEventListener("click", async () => {
+  const articleMarkdown = articleEditor.value || currentArticleMarkdown;
+  if (!articleMarkdown.trim()) {
+    return;
+  }
+
+  qualityCheckButton.disabled = true;
+  uploadToTistoryButton.disabled = true;
+  qualityScoreBadge.className = "badge subtle";
+  qualityScoreBadge.textContent = "검사 중";
+  copyStatusText.textContent = "수정된 본문의 사실 근거와 품질을 다시 검사하고 있습니다.";
+
+  try {
+    const response = await fetch("/quality-check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        article_markdown: articleMarkdown,
+        firsthand_notes: firsthandNotesInput.value.trim(),
+      }),
+    });
+    const data = await parseResponse(response);
+    if (!response.ok) {
+      throw new Error(data.detail || "품질 검사에 실패했습니다.");
+    }
+    currentArticleMarkdown = articleMarkdown;
+    renderQualityReport(data);
+    copyStatusText.textContent = currentQualityPassed
+      ? "품질 검사를 통과했습니다. 최종 사실관계를 직접 확인한 뒤 업로드하세요."
+      : "품질 검사에서 차단됐습니다. 표시된 사유를 수정하세요.";
+  } catch (error) {
+    renderQualityReport(null, error.message);
+    copyStatusText.textContent = error.message;
+  } finally {
+    qualityCheckButton.disabled = !articleMarkdown.trim();
+  }
 });
 
 uploadToTistoryButton.addEventListener("click", async () => {
@@ -582,6 +745,11 @@ uploadToTistoryButton.addEventListener("click", async () => {
 
   if (!articleMarkdown.trim()) {
     publishStatusText.textContent = "업로드할 글이 없습니다.";
+    return;
+  }
+  if (!currentQualityPassed) {
+    publishStatusText.textContent =
+      "현재 본문은 품질 검사를 통과하지 않았습니다. 먼저 품질 검사를 실행하세요.";
     return;
   }
 
@@ -639,7 +807,7 @@ uploadToTistoryButton.addEventListener("click", async () => {
   } catch (error) {
     publishStatusText.textContent = error.message;
   } finally {
-    uploadToTistoryButton.disabled = !articleMarkdown.trim();
+    uploadToTistoryButton.disabled = !articleMarkdown.trim() || !currentQualityPassed;
   }
 });
 

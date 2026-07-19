@@ -125,6 +125,7 @@ celerybeat.pid
 
 # Environments
 .env
+.tistory-auth.json
 .venv
 env/
 venv/

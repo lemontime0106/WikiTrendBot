@@ -123,7 +123,7 @@ h1 {
 .primary-button:disabled,
 .secondary-button:disabled,
 .keyword-button:disabled {
-  cursor: wait;
+  cursor: not-allowed;
   opacity: 0.7;
   transform: none;
 }
@@ -348,6 +348,15 @@ h1 {
   resize: vertical;
 }
 
+.compact-textarea {
+  min-height: 86px;
+}
+
+.field-spacing {
+  display: block;
+  margin-top: 16px;
+}
+
 .manual-generate-button {
   width: 100%;
   margin-top: 14px;
@@ -404,6 +413,85 @@ h1 {
 .support-card-meta {
   color: var(--muted);
   font-size: 0.93rem;
+}
+
+.support-card-link,
+.article-output a {
+  color: var(--accent-strong);
+  font-weight: 700;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.quality-pass {
+  background: rgba(38, 132, 84, 0.13);
+  color: #17693f;
+}
+
+.quality-fail {
+  background: rgba(178, 50, 50, 0.12);
+  color: #982c2c;
+}
+
+.quality-report-list {
+  display: grid;
+  gap: 12px;
+}
+
+.quality-blocking-summary,
+.quality-success-summary {
+  padding: 14px 16px;
+  border-radius: 16px;
+}
+
+.quality-blocking-summary {
+  background: rgba(178, 50, 50, 0.08);
+  border: 1px solid rgba(178, 50, 50, 0.2);
+  color: #7d2727;
+}
+
+.quality-success-summary {
+  background: rgba(38, 132, 84, 0.08);
+  border: 1px solid rgba(38, 132, 84, 0.2);
+  color: #17693f;
+  font-weight: 700;
+}
+
+.quality-check-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.quality-check-card {
+  padding: 13px 14px;
+  border-radius: 15px;
+  background: #fffdf9;
+  border: 1px solid rgba(95, 72, 47, 0.1);
+}
+
+.quality-check-card.is-pass {
+  border-color: rgba(38, 132, 84, 0.2);
+}
+
+.quality-check-card.is-fail {
+  border-color: rgba(178, 50, 50, 0.24);
+}
+
+.quality-check-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+  color: var(--text);
+}
+
+.quality-check-card.is-pass .quality-check-heading span {
+  color: #17693f;
+}
+
+.quality-check-card.is-fail .quality-check-heading span {
+  color: #982c2c;
 }
 
 .image-slot-list {
@@ -518,6 +606,10 @@ h1 {
   }
 
   .support-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .quality-check-grid {
     grid-template-columns: 1fr;
   }
 }
