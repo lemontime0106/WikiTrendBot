@@ -25,9 +25,6 @@ const uploadToTistoryButton = document.getElementById("uploadToTistoryButton");
 const publishStatusText = document.getElementById("publishStatusText");
 const manualKeywordInput = document.getElementById("manualKeywordInput");
 const manualGenerateButton = document.getElementById("manualGenerateButton");
-const userPurposeInput = document.getElementById("userPurposeInput");
-const firsthandNotesInput = document.getElementById("firsthandNotesInput");
-const sourceUrlsInput = document.getElementById("sourceUrlsInput");
 const qualityCheckButton = document.getElementById("qualityCheckButton");
 const qualityScoreBadge = document.getElementById("qualityScoreBadge");
 const qualityReportList = document.getElementById("qualityReportList");
@@ -454,10 +451,7 @@ async function parseResponse(response) {
 }
 
 function setArticleLoading(keyword) {
-  const userPurpose = userPurposeInput.value.trim();
-  articleMeta.textContent = userPurpose
-    ? `"${keyword}" 키워드와 사용자 목적을 반영해 글을 생성 중입니다.`
-    : `"${keyword}" 키워드로 글을 생성 중입니다.`;
+  articleMeta.textContent = `"${keyword}" 키워드의 독자와 글 방향을 기획하고 있습니다.`;
   articleOutput.classList.remove("empty-state");
   articleOutput.innerHTML = "글을 생성하고 있습니다...";
   syncEditor("");
@@ -556,12 +550,6 @@ async function loadTrends() {
 }
 
 async function generateArticle(keyword) {
-  const userPurpose = userPurposeInput.value.trim();
-  const firsthandNotes = firsthandNotesInput.value.trim();
-  const sourceUrls = sourceUrlsInput.value
-    .split(/\r?\n|,/)
-    .map((item) => item.trim())
-    .filter(Boolean);
   setArticleLoading(keyword);
   setStatus(`"${keyword}" 키워드로 글을 생성하고 있습니다.`);
   manualGenerateButton.disabled = true;
@@ -574,9 +562,6 @@ async function generateArticle(keyword) {
       },
       body: JSON.stringify({
         keyword,
-        user_purpose: userPurpose,
-        firsthand_notes: firsthandNotes,
-        source_urls: sourceUrls,
       }),
     });
     const data = await parseResponse(response);
@@ -589,8 +574,9 @@ async function generateArticle(keyword) {
     const revisionText = Number(data.revision_count || 0)
       ? ` / 자동 수정 ${data.revision_count}회`
       : "";
-    articleMeta.textContent = data.user_purpose
-      ? `선택 키워드: ${data.selected_keyword} / 사용자 목적 반영 완료${revisionText}`
+    const readerOutcome = data.article_plan?.reader_outcome || "";
+    articleMeta.textContent = readerOutcome
+      ? `선택 키워드: ${data.selected_keyword} / 독자 목표: ${readerOutcome}${revisionText}`
       : `선택 키워드: ${data.selected_keyword}${revisionText}`;
     articleOutput.className = "article-output";
     syncEditor(data.article_markdown || "");
@@ -717,7 +703,7 @@ qualityCheckButton.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         article_markdown: articleMarkdown,
-        firsthand_notes: firsthandNotesInput.value.trim(),
+        firsthand_notes: "",
       }),
     });
     const data = await parseResponse(response);

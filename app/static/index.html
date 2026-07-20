@@ -25,20 +25,6 @@
 
     <section class="panel-grid">
       <section class="panel">
-        <section class="custom-context-panel">
-          <div class="panel-heading">
-            <h2>사용자 정의 정보</h2>
-            <span class="badge subtle">공통 반영</span>
-          </div>
-          <label class="manual-label" for="userPurposeInput">사용자 목적 / 원하는 글 방향</label>
-          <textarea id="userPurposeInput" class="manual-input manual-textarea compact-textarea" placeholder="예: 소규모 개발팀이 AI 코드 리뷰 도구를 고를 수 있도록 비교 기준을 정리해줘"></textarea>
-          <label class="manual-label field-spacing" for="firsthandNotesInput">직접 경험·검증 메모</label>
-          <textarea id="firsthandNotesInput" class="manual-input manual-textarea" placeholder="직접 사용한 환경, 기간, 버전, 측정 결과, 실패 사례를 적어주세요. 리뷰·추천·직접 비교 글에는 80자 이상 필요합니다."></textarea>
-          <label class="manual-label field-spacing" for="sourceUrlsInput">추가 공식 출처 URL</label>
-          <textarea id="sourceUrlsInput" class="manual-input manual-textarea compact-textarea" placeholder="공식 문서 URL을 한 줄에 하나씩 입력하세요."></textarea>
-          <p class="manual-help">트렌드 선택과 직접 입력 모두에 반영되며, 근거가 부족한 주제는 생성 단계에서 차단됩니다.</p>
-        </section>
-
         <div class="mode-tabs">
           <button id="trendModeButton" class="mode-tab is-active" type="button">트렌드 선택</button>
           <button id="manualModeButton" class="mode-tab" type="button">직접 입력</button>
@@ -62,7 +48,7 @@
           <label class="manual-label" for="manualKeywordInput">작성할 키워드</label>
           <input id="manualKeywordInput" class="manual-input" type="text" placeholder="예: AI 에이전트 관측성 도입 기준">
           <button id="manualGenerateButton" class="primary-button manual-generate-button" type="button">이 키워드로 글 생성</button>
-          <p class="manual-help">검색 결과와 추가한 공식 자료의 본문을 조사한 뒤, 사이트 주제와 근거가 충분할 때만 글을 생성합니다.</p>
+          <p class="manual-help">독자, 글의 목적, 작성 방향과 공식 근거를 자동으로 기획합니다. 직접 경험이 필요한 리뷰·후기 주제는 생성하지 않습니다.</p>
         </section>
       </section>
 

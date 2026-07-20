@@ -306,7 +306,7 @@ def _source_context(search_results: list[dict[str, str]]) -> str:
         url = source.get("url", "").strip() or "URL 없음"
         excerpt = source.get("content_excerpt", "").strip()
         fetch_status = source.get("fetch_status", "").strip()
-        evidence = excerpt or snippet
+        evidence = (excerpt[:2500] if excerpt else snippet)
         lines.append(
             f"[자료 {index}]\n제목: {title}\n발행처: {publisher}\nURL: {url}\n"
             f"원문 수집 상태: {fetch_status or '검색 요약만 사용'}\n"
@@ -384,7 +384,8 @@ async def node_plan_article(state: TrendWriterState) -> TrendWriterState:
     if source_count < min_sources or usable_source_count < min_sources:
         raise ContentRejectedError(
             f"출처 URL은 {source_count}개지만 본문 또는 충분한 요약을 읽은 자료는 "
-            f"{usable_source_count}개입니다. 공식 자료 URL을 추가해 최소 {min_sources}개를 확보하세요."
+            f"{usable_source_count}개입니다. 자동 조사로 최소 {min_sources}개를 확보하지 못했으니 "
+            "키워드를 더 구체적으로 바꾸거나 잠시 후 다시 시도하세요."
         )
 
     site_focus = os.getenv(
@@ -441,7 +442,8 @@ async def node_plan_article(state: TrendWriterState) -> TrendWriterState:
         )
     if plan.requires_firsthand_evidence and len(firsthand_notes) < 80:
         raise ContentRejectedError(
-            "이 주제는 리뷰·추천·직접 비교 성격이므로 80자 이상의 직접 경험·검증 메모가 필요합니다."
+            "이 주제는 실제 사용·측정이 필요한 리뷰 성격이라 자동 작성 대상에서 제외했습니다. "
+            "공식 자료만으로 검증 가능한 정보형 키워드를 선택하세요."
         )
     if plan.risk_level.lower() == "high" and os.getenv(
         "CONTENT_ALLOW_HIGH_RISK_TOPICS", ""

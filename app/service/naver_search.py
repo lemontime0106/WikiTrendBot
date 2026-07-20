@@ -58,10 +58,11 @@ async def collect_naver_search_context(keyword: str) -> dict[str, object]:
             seen_titles: set[str] = set()
             seen_urls: set[str] = set()
 
-            async def collect_query(query: str) -> None:
+            async def collect_query(query: str, per_query_limit: int) -> None:
                 url = f"https://search.naver.com/search.naver?query={quote_plus(query)}"
                 await page.goto(url, timeout=15000)
                 await page.wait_for_selector(combined, timeout=10000)
+                query_result_count = 0
 
                 for selector in title_selectors:
                     elements = await page.query_selector_all(selector)
@@ -134,17 +135,23 @@ async def collect_naver_search_context(keyword: str) -> dict[str, object]:
                                 "url": href,
                             }
                         )
-                        if len(results) >= 10:
+                        query_result_count += 1
+                        if query_result_count >= per_query_limit:
                             return
 
-            queries = [keyword, f"{keyword} 공식 발표"]
-            for query in queries:
+            queries = [
+                (f"{keyword} 공식 발표", 4),
+                (f"{keyword} 공식 문서", 4),
+                (keyword, 5),
+                (f"{keyword} 보도자료", 3),
+            ]
+            for query, per_query_limit in queries:
                 try:
-                    await collect_query(query)
+                    await collect_query(query, per_query_limit)
                 except Exception:
-                    if query == keyword and not results:
+                    if not results and query == keyword:
                         raise
-                if len(results) >= 10:
+                if len(results) >= 16:
                     break
 
             if not results:
