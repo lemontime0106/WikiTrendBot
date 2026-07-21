@@ -352,6 +352,11 @@ h1 {
   min-height: 86px;
 }
 
+.planning-input {
+  min-height: 220px;
+  white-space: pre;
+}
+
 .field-spacing {
   display: block;
   margin-top: 16px;

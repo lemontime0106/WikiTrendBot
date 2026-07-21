@@ -24,7 +24,7 @@ from app.service.content_quality import (
 )
 from app.service.existing_content import collect_existing_posts, serialize_existing_posts
 from app.service.naver_search import collect_naver_search_context
-from app.service.research_sources import count_usable_sources, enrich_research_sources
+from app.service.research_sources import enrich_research_sources
 
 
 class SupportedClaim(BaseModel):
@@ -51,8 +51,8 @@ class ArticlePlan(BaseModel):
 class TrendWriterState(TypedDict, total=False):
     keyword: Optional[str]
     user_purpose: str
+    planning_brief: str
     firsthand_notes: str
-    source_urls: list[str]
     search_context: str
     search_results: list[dict[str, str]]
     existing_posts: list[dict[str, str]]
@@ -98,6 +98,7 @@ async def _openai_chat_completions(
     messages: list[BaseMessage],
     base_url: str = "https://api.openai.com/v1",
     temperature: float | None = None,
+    max_output_tokens: int = 2600,
 ) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     payload: dict[str, Any] = {
@@ -120,25 +121,39 @@ async def _openai_chat_completions(
     }
     if temperature is not None:
         payload["temperature"] = temperature
+    payload["max_tokens"] = max_output_tokens
 
     async with httpx.AsyncClient(timeout=120) as client:
-        try:
-            response = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {api_key}"},
-                json=payload,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            detail = exc.response.text.strip()
-            if len(detail) > 500:
-                detail = detail[:500].rstrip() + "..."
-            raise RuntimeError(
-                "LLM API 요청이 실패했습니다. "
-                f"status={exc.response.status_code}, body={detail or '응답 본문 없음'}"
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise RuntimeError(f"LLM API 연결에 실패했습니다: {exc}") from exc
+        response: httpx.Response | None = None
+        for attempt in range(3):
+            try:
+                response = await client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json=payload,
+                )
+                response.raise_for_status()
+                break
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 429 and attempt < 2:
+                    try:
+                        retry_after = float(exc.response.headers.get("retry-after", "10"))
+                    except ValueError:
+                        retry_after = 10
+                    await asyncio.sleep(min(max(retry_after, 1), 30))
+                    continue
+                detail = exc.response.text.strip()
+                if len(detail) > 500:
+                    detail = detail[:500].rstrip() + "..."
+                raise RuntimeError(
+                    "LLM API 요청이 실패했습니다. "
+                    f"status={exc.response.status_code}, body={detail or '응답 본문 없음'}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise RuntimeError(f"LLM API 연결에 실패했습니다: {exc}") from exc
+
+    if response is None:
+        raise RuntimeError("LLM API 응답을 받지 못했습니다.")
 
     data = response.json()
     try:
@@ -147,7 +162,7 @@ async def _openai_chat_completions(
         raise RuntimeError(f"LLM 응답 형식이 예상과 다릅니다: {data}") from exc
 
 
-def _create_llm_runnable(model: str) -> Runnable:
+def _create_llm_runnable(model: str, *, max_output_tokens: int = 2600) -> Runnable:
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     temperature = _temperature_for_model(model)
@@ -167,6 +182,10 @@ def _create_llm_runnable(model: str) -> Runnable:
                 kwargs["api_key"] = api_key
             if temperature is not None:
                 kwargs["temperature"] = temperature
+            configured_max_tokens = int(
+                os.getenv("OPENAI_MAX_OUTPUT_TOKENS", str(max_output_tokens))
+            )
+            kwargs["max_tokens"] = min(max_output_tokens, configured_max_tokens)
             reasoning_effort = (os.getenv("OPENAI_REASONING_EFFORT") or "").strip()
             if reasoning_effort:
                 kwargs["reasoning_effort"] = reasoning_effort
@@ -202,6 +221,10 @@ def _create_llm_runnable(model: str) -> Runnable:
                 base_url=base_url,
                 temperature=temperature,
                 messages=input,
+                max_output_tokens=min(
+                    max_output_tokens,
+                    int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", str(max_output_tokens))),
+                ),
             )
             return AIMessage(content=text)
 
@@ -242,7 +265,7 @@ async def _invoke_structured(
     messages: list[BaseMessage],
     schema: type[StructuredModel],
 ) -> StructuredModel:
-    llm = _create_llm_runnable(model)
+    llm = _create_llm_runnable(model, max_output_tokens=1000)
     structured_method = getattr(llm, "with_structured_output", None)
     if callable(structured_method):
         for method in ("json_schema", "function_calling"):
@@ -298,36 +321,34 @@ def _extract_image_prompts(content: str) -> list[dict[str, str | int]]:
 
 
 def _source_context(search_results: list[dict[str, str]]) -> str:
+    max_chars = max(
+        1200,
+        int(os.getenv("CONTENT_MAX_RESEARCH_CONTEXT_CHARS", "2600")),
+    )
+    max_sources = max(1, int(os.getenv("CONTENT_MAX_RESEARCH_SOURCES_IN_PROMPT", "4")))
     lines: list[str] = []
-    for index, source in enumerate(search_results, start=1):
+    used_chars = 0
+    for index, source in enumerate(search_results[:max_sources], start=1):
         title = source.get("title", "").strip() or "제목 없음"
         publisher = source.get("source", "").strip() or "발행처 미상"
         snippet = source.get("snippet", "").strip() or "요약 없음"
         url = source.get("url", "").strip() or "URL 없음"
         excerpt = source.get("content_excerpt", "").strip()
         fetch_status = source.get("fetch_status", "").strip()
-        evidence = (excerpt[:2500] if excerpt else snippet)
-        lines.append(
+        evidence = excerpt[:450] if excerpt else snippet[:450]
+        block = (
             f"[자료 {index}]\n제목: {title}\n발행처: {publisher}\nURL: {url}\n"
             f"원문 수집 상태: {fetch_status or '검색 요약만 사용'}\n"
             f"확인 가능한 내용: {evidence}"
         )
+        remaining = max_chars - used_chars
+        if remaining <= 0:
+            break
+        if len(block) > remaining:
+            block = block[:remaining].rstrip()
+        lines.append(block)
+        used_chars += len(block) + 2
     return "\n\n".join(lines)
-
-
-def _normalize_user_source_urls(source_urls: list[str]) -> list[str]:
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for raw_url in source_urls[:10]:
-        url = raw_url.strip()
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            continue
-        if url in seen:
-            continue
-        seen.add(url)
-        normalized.append(url)
-    return normalized
 
 
 async def node_collect_search_context(state: TrendWriterState) -> TrendWriterState:
@@ -335,32 +356,27 @@ async def node_collect_search_context(state: TrendWriterState) -> TrendWriterSta
     if not keyword:
         raise RuntimeError("검색할 키워드가 비어 있습니다.")
 
-    search_data = await collect_naver_search_context(keyword)
-    search_results = list(search_data["search_results"])
-    seen_urls = {
-        item.get("url", "").strip()
-        for item in search_results
-        if item.get("url", "").strip()
-    }
-    for url in _normalize_user_source_urls(state.get("source_urls", [])):
-        if url in seen_urls:
-            continue
-        host = (urlparse(url).hostname or "사용자 제공 출처").removeprefix("www.")
-        search_results.append(
-            {
-                "title": f"사용자 제공 참고자료: {host}",
-                "snippet": "사용자가 글의 근거로 직접 제공한 URL입니다. URL에서 확인되지 않는 내용을 추측하지 마세요.",
-                "source": host,
-                "url": url,
-            }
-        )
-        seen_urls.add(url)
-
+    try:
+        search_data = await collect_naver_search_context(keyword)
+        search_results = list(search_data["search_results"])
+    except RuntimeError:
+        search_results = []
     search_results = await enrich_research_sources(search_results)
     blog_url = (os.getenv("TISTORY_BLOG_URL") or "").strip()
     existing_posts = await collect_existing_posts(blog_url) if blog_url else []
+    planning_brief = (state.get("planning_brief") or "").strip()
+    planning_brief = planning_brief[
+        : max(500, int(os.getenv("CONTENT_MAX_PLANNING_BRIEF_CHARS", "1200")))
+    ]
+    search_context = _source_context(search_results)
+    if planning_brief:
+        search_context = (
+            f"{search_context}\n\n[퍼플렉시티 기획 참고]\n{planning_brief}"
+            if search_context
+            else f"[퍼플렉시티 기획 참고]\n{planning_brief}"
+        )
     return {
-        "search_context": _source_context(search_results),
+        "search_context": search_context,
         "search_results": search_results,
         "existing_posts": serialize_existing_posts(existing_posts),
     }
@@ -372,22 +388,6 @@ async def node_plan_article(state: TrendWriterState) -> TrendWriterState:
     firsthand_notes = (state.get("firsthand_notes") or "").strip()
     search_results = state.get("search_results", [])
     search_context = (state.get("search_context") or "").strip()
-    source_count = len(
-        {
-            item.get("url", "").strip()
-            for item in search_results
-            if item.get("url", "").strip()
-        }
-    )
-    usable_source_count = count_usable_sources(search_results)
-    min_sources = int(os.getenv("CONTENT_MIN_RESEARCH_SOURCES", "3"))
-    if source_count < min_sources or usable_source_count < min_sources:
-        raise ContentRejectedError(
-            f"출처 URL은 {source_count}개지만 본문 또는 충분한 요약을 읽은 자료는 "
-            f"{usable_source_count}개입니다. 자동 조사로 최소 {min_sources}개를 확보하지 못했으니 "
-            "키워드를 더 구체적으로 바꾸거나 잠시 후 다시 시도하세요."
-        )
-
     site_focus = os.getenv(
         "CONTENT_SITE_FOCUS",
         "AI 도구 실험, 업무 자동화, 1인 개발·SaaS, AI 산업·정책",
@@ -414,7 +414,8 @@ async def node_plan_article(state: TrendWriterState) -> TrendWriterState:
                 "- 사이트 핵심 분야와 직접 관련이 없으면 topic_fit=false, publishable=false\n"
                 "- 금융 투자 추천, 보험·대출 추천, 의료·법률·세무 조언은 risk_level=high\n"
                 "- 리뷰·추천·방문기·제품 비교는 직접 경험 메모가 있어야 함\n"
-                "- supported_claims에는 실제 자료 URL로 뒷받침되는 주장만 포함\n"
+                "- supported_claims에는 수집 자료나 퍼플렉시티 기획에서 확인되는 주장만 포함\n"
+                "- 실제 URL이 수집된 주장에만 source_urls를 넣고 URL이 없으면 빈 배열로 둘 것\n"
                 "- 자료가 서로 충돌하거나 얕으면 발행 불가로 판정\n"
                 "- unique_angle은 일반적인 정의 요약이 아니라 독자가 실행하거나 판단할 수 있는 구체적인 각도여야 함\n"
                 "- 글을 읽은 독자가 무엇을 할 수 있게 되는지 reader_outcome에 명확히 작성\n",
@@ -456,9 +457,7 @@ async def node_plan_article(state: TrendWriterState) -> TrendWriterState:
         for item in search_results
         if item.get("url", "").strip()
     }
-    planned_claims = [
-        claim for claim in plan.supported_claims if claim.claim.strip() and claim.source_urls
-    ]
+    planned_claims = [claim for claim in plan.supported_claims if claim.claim.strip()]
     planned_urls = {
         url.strip()
         for claim in planned_claims
@@ -469,9 +468,9 @@ async def node_plan_article(state: TrendWriterState) -> TrendWriterState:
         raise ContentRejectedError(
             "기획안이 수집하지 않은 출처 URL을 사용했습니다. 자료를 다시 수집해 생성하세요."
         )
-    if len(planned_claims) < 3 or len(planned_urls) < 2:
+    if len(planned_claims) < 3:
         raise ContentRejectedError(
-            "글을 지탱할 근거 주장이 부족합니다. 서로 다른 출처에 연결된 주장 3개 이상이 필요합니다."
+            "글을 지탱할 구체적인 핵심 내용이 부족합니다. 작성 가능한 핵심 내용이 3개 이상 필요합니다."
         )
     return {"article_plan": plan.model_dump()}
 
@@ -506,9 +505,9 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
                 "- 제목은 본문이 실제로 입증하는 범위만 약속\n"
                 "- 도입부에서 독자의 문제와 이 글을 읽고 얻는 결과를 구체적으로 제시\n"
                 "- 단순 정의 요약보다 비교 기준, 판단 과정, 실행 단계, 한계 중 주제에 맞는 요소를 포함\n"
-                "- 모든 통계·날짜·제품 기능·정책 주장은 제공된 URL과 연결\n"
-                "- 본문 안에서 출처를 자연스러운 마크다운 링크 [자료명](URL)로 표시\n"
-                "- 마지막에 반드시 ## 참고자료를 만들고 실제 사용한 출처 링크를 3개 이상 나열\n"
+                "- 실제 URL이 수집된 통계·날짜·제품 기능·정책 주장은 마크다운 링크로 연결\n"
+                "- 수집된 URL이 있을 때만 마지막에 ## 참고자료를 만들고 실제 URL만 나열\n"
+                "- URL이 없다는 이유로 글 작성을 중단하거나 URL을 만들어 내지 말 것\n"
                 "- 제공되지 않은 URL을 만들지 말 것\n"
                 "- 직접 경험 메모가 없으면 실사용·직접 비교·직접 방문했다고 표현하지 말 것\n"
                 "- '검색을 통해', '전문성 있어 보이는', '오늘의 한줄 요약' 같은 양산형 표현 금지\n"
@@ -529,7 +528,7 @@ async def node_generate_article(state: TrendWriterState) -> TrendWriterState:
         article_plan=plan.model_dump_json(indent=2),
         search_context=search_context,
     )
-    llm = _create_llm_runnable(_writer_model())
+    llm = _create_llm_runnable(_writer_model(), max_output_tokens=2600)
     result = await llm.ainvoke(messages)
     content = _message_content(result)
     if not content.strip():
@@ -570,10 +569,13 @@ async def _review_article(
                 "검수할 글:\n{article_markdown}\n\n"
                 "검수 규칙:\n"
                 "- 허용된 자료에서 확인할 수 없는 구체적 주장은 unsupported_claims에 기록\n"
+                "- 퍼플렉시티 기획과 검색 요약에 일관되게 포함된 핵심 내용은 검토 근거로 사용할 수 있음\n"
                 "- 다른 글에서도 볼 수 있는 일반론뿐이면 originality_score와 reader_value_score를 낮게 평가\n"
                 "- 실사용·직접 비교를 주장하지만 경험 메모가 뒷받침하지 않으면 차단\n"
                 "- 제목이 과장되거나 본문보다 넓은 약속을 하면 차단\n"
-                "- 참고자료 링크가 본문의 핵심 주장과 실제로 연결되는지 평가\n"
+                "- 참고자료 링크가 있다면 본문의 핵심 주장과 실제로 연결되는지 평가\n"
+                "- 출처 링크 개수가 적거나 없다는 이유만으로 차단하지 말 것\n"
+                "- source_quality_score는 URL 개수가 아니라 제공된 기획·검색 자료와 글의 일치도로 평가\n"
                 "- 사이트 핵심 분야와 맞지 않으면 topic_fit=false\n"
                 "- 금융·의료·법률 조언이면 risk_level=high\n"
                 "- blocking_issues 또는 unsupported_claims가 하나라도 있으면 passed=false\n"
@@ -623,19 +625,22 @@ async def _revise_article(
                 "허용된 근거 자료:\n{search_context}\n\n"
                 "직접 경험·검증 메모:\n{firsthand_notes}\n\n"
                 "기존 글:\n{article_markdown}\n\n"
-                "출력은 수정된 마크다운 글만 작성하세요. "
-                "H1 하나, H2 세 개 이상, ## 참고자료와 실제 출처 링크 세 개 이상을 유지하세요.",
+                "출력은 수정된 마크다운 글만 작성하세요. H1 하나와 H2 세 개 이상을 유지하세요. "
+                "기존 글에 실제 출처 링크가 있을 때만 참고자료 구역을 유지하세요.",
             ),
         ]
     )
+    instruction_text = (
+        "\n".join(f"- {item}" for item in instructions if item)
+        or "- 편집 품질을 전반적으로 높일 것"
+    )[:1200]
     messages = prompt.format_messages(
-        instructions="\n".join(f"- {item}" for item in instructions if item)
-        or "- 편집 품질을 전반적으로 높일 것",
+        instructions=instruction_text,
         search_context=search_context,
         firsthand_notes=firsthand_notes or "제공되지 않음",
         article_markdown=article_markdown,
     )
-    llm = _create_llm_runnable(_writer_model())
+    llm = _create_llm_runnable(_writer_model(), max_output_tokens=2600)
     result = await llm.ainvoke(messages)
     revised = _message_content(result)
     if not revised.strip():
@@ -744,15 +749,15 @@ async def run_trend_writer(
     *,
     keyword: Optional[str] = None,
     user_purpose: Optional[str] = None,
+    planning_brief: Optional[str] = None,
     firsthand_notes: Optional[str] = None,
-    source_urls: Optional[list[str]] = None,
 ) -> TrendWriterState:
     graph = build_trend_writer_graph()
     initial_state: TrendWriterState = {
         "keyword": keyword,
         "user_purpose": (user_purpose or "").strip(),
+        "planning_brief": (planning_brief or "").strip(),
         "firsthand_notes": (firsthand_notes or "").strip(),
-        "source_urls": _normalize_user_source_urls(source_urls or []),
     }
     return await graph.ainvoke(initial_state)
 
@@ -779,19 +784,6 @@ async def review_edited_article(
         search_context=search_context,
         firsthand_notes=firsthand_notes.strip(),
     )
-    min_sources = int(os.getenv("CONTENT_MIN_RESEARCH_SOURCES", "3"))
-    usable_source_count = count_usable_sources(search_results)
-    if usable_source_count < min_sources:
-        issue = (
-            f"본문에서 실제로 읽을 수 있는 출처가 {usable_source_count}개입니다. "
-            f"최소 {min_sources}개의 접근 가능한 출처가 필요합니다."
-        )
-        review = review.model_copy(
-            update={
-                "passed": False,
-                "blocking_issues": [*review.blocking_issues, issue],
-            }
-        )
     blog_url = (os.getenv("TISTORY_BLOG_URL") or "").strip()
     existing_posts = await collect_existing_posts(blog_url) if blog_url else []
     return evaluate_article(

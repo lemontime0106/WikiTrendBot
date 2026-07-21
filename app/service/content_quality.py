@@ -218,8 +218,6 @@ def evaluate_article(
     allowed_source_urls: Iterable[str] | None = None,
 ) -> QualityReport:
     min_chars = int(os.getenv("CONTENT_MIN_ARTICLE_CHARS", "1800"))
-    min_sources = int(os.getenv("CONTENT_MIN_SOURCE_LINKS", "3"))
-    min_domains = int(os.getenv("CONTENT_MIN_SOURCE_DOMAINS", "2"))
     min_editorial_score = int(os.getenv("CONTENT_MIN_EDITORIAL_SCORE", "80"))
     duplicate_threshold = float(os.getenv("CONTENT_DUPLICATE_THRESHOLD", "0.72"))
     allow_high_risk = os.getenv("CONTENT_ALLOW_HIGH_RISK_TOPICS", "").strip().lower() in {
@@ -286,15 +284,6 @@ def evaluate_article(
             failure=f"본문은 최소 {min_chars:,}자이며 H2 소제목이 3개 이상이어야 합니다.",
         ),
         _build_check(
-            code="sources",
-            label="근거 링크",
-            passed=len(source_urls) >= min_sources and len(source_domains) >= min_domains,
-            blocking=True,
-            weight=14,
-            success=f"출처 {len(source_urls)}개, 도메인 {len(source_domains)}개가 연결됐습니다.",
-            failure=f"서로 다른 {min_domains}개 이상의 도메인에서 출처 링크 {min_sources}개 이상이 필요합니다.",
-        ),
-        _build_check(
             code="source_allowlist",
             label="수집 출처만 사용",
             passed=not unapproved_source_urls,
@@ -305,15 +294,6 @@ def evaluate_article(
                 "조사 목록에 없던 URL이 포함됐습니다: "
                 + ", ".join(unapproved_source_urls[:3])
             ),
-        ),
-        _build_check(
-            code="reference_section",
-            label="참고자료 구역",
-            passed=has_reference_section,
-            blocking=True,
-            weight=6,
-            success="독자가 확인할 수 있는 참고자료 구역이 있습니다.",
-            failure="본문 마지막에 H2 형식의 참고자료 구역이 필요합니다.",
         ),
         _build_check(
             code="template_language",
@@ -410,6 +390,7 @@ def evaluate_article(
             "source_count": len(source_urls),
             "source_domain_count": len(source_domains),
             "source_domains": sorted(source_domains),
+            "has_reference_section": has_reference_section,
             "unapproved_source_urls": unapproved_source_urls,
             "template_phrases": template_hits,
             "firsthand_claims": firsthand_claims,

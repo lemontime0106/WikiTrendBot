@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 
 from app.service.content_quality import (
@@ -134,6 +135,19 @@ class ContentQualityTests(unittest.TestCase):
             report.metrics["unapproved_source_urls"],
             ["https://docs.github.com/en"],
         )
+
+    def test_article_without_source_links_can_pass(self) -> None:
+        article = re.sub(r"\[([^\]]+)\]\(https?://[^)]+\)", r"\1", _long_article())
+        article = article.split("## 참고자료", 1)[0].strip()
+
+        report = evaluate_article(
+            article,
+            editorial_review=_editorial_review(),
+            allowed_source_urls=[],
+        )
+
+        self.assertTrue(report.passed)
+        self.assertEqual(report.metrics["source_count"], 0)
 
 
 if __name__ == "__main__":

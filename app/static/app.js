@@ -451,7 +451,10 @@ async function parseResponse(response) {
 }
 
 function setArticleLoading(keyword) {
-  articleMeta.textContent = `"${keyword}" 키워드의 독자와 글 방향을 기획하고 있습니다.`;
+  const isPlanningTable = keyword.includes("\t") || keyword.includes("\n");
+  articleMeta.textContent = isPlanningTable
+    ? "붙여넣은 퍼플렉시티 표에서 최우선 주제를 선택하고 있습니다."
+    : `"${keyword.slice(0, 80)}" 키워드의 독자와 글 방향을 기획하고 있습니다.`;
   articleOutput.classList.remove("empty-state");
   articleOutput.innerHTML = "글을 생성하고 있습니다...";
   syncEditor("");
@@ -551,7 +554,7 @@ async function loadTrends() {
 
 async function generateArticle(keyword) {
   setArticleLoading(keyword);
-  setStatus(`"${keyword}" 키워드로 글을 생성하고 있습니다.`);
+  setStatus("입력 내용을 분석하고 글을 생성하고 있습니다.");
   manualGenerateButton.disabled = true;
 
   try {
@@ -596,9 +599,9 @@ async function generateArticle(keyword) {
         ? "품질 검사를 통과했습니다. 최종 내용을 직접 확인하세요."
         : "발행 차단 사유를 확인하고 글을 수정한 뒤 다시 검사하세요.",
     });
-    setStatus(`"${keyword}" 키워드 글 생성을 마쳤습니다.`);
+    setStatus(`"${data.selected_keyword}" 키워드 글 생성을 마쳤습니다.`);
   } catch (error) {
-    articleMeta.textContent = `선택 키워드: ${keyword}`;
+    articleMeta.textContent = "붙여넣은 내용으로 글 생성에 실패했습니다.";
     articleOutput.className = "article-output empty-state";
     articleOutput.textContent = error.message;
     syncEditor("");
@@ -818,13 +821,6 @@ manualGenerateButton.addEventListener("click", () => {
   });
   selectedKeyword = "";
   generateArticle(keyword);
-});
-
-manualKeywordInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    manualGenerateButton.click();
-  }
 });
 
 loadTrendsButton.addEventListener("click", loadTrends);

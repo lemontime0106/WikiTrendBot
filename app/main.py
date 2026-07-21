@@ -11,7 +11,7 @@ if sys.platform.startswith("win"):
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from starlette.staticfiles import StaticFiles
 from app.service.get_trend import get_trend_data
 from app.graph.trend_writer import (
@@ -21,6 +21,7 @@ from app.graph.trend_writer import (
 )
 from app.service.approval_store import approve_article, get_article_approval
 from app.service.content_quality import QualityReport
+from app.service.planning_input import parse_planning_input
 from app.service.tistory_publish import publish_to_tistory
 
 load_dotenv()
@@ -34,7 +35,6 @@ class GenerateRequest(BaseModel):
     keyword: str
     user_purpose: str | None = None
     firsthand_notes: str | None = None
-    source_urls: list[str] = Field(default_factory=list)
 
 
 class QualityCheckRequest(BaseModel):
@@ -74,8 +74,17 @@ async def get_trend():
 async def generate(keyword: str | None = None, user_purpose: str | None = None):
     if not keyword or not keyword.strip():
         raise HTTPException(status_code=400, detail="keyword 쿼리가 필요합니다.")
+    parsed_input = parse_planning_input(keyword)
+    selected_keyword = parsed_input.keyword
+    if not selected_keyword:
+        raise HTTPException(status_code=400, detail="입력에서 작성할 키워드를 찾지 못했습니다.")
+    effective_purpose = (user_purpose or parsed_input.user_purpose).strip()
     try:
-        out = await run_trend_writer(keyword=keyword, user_purpose=user_purpose)
+        out = await run_trend_writer(
+            keyword=selected_keyword,
+            user_purpose=effective_purpose,
+            planning_brief=parsed_input.planning_brief,
+        )
     except ContentRejectedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -86,8 +95,9 @@ async def generate(keyword: str | None = None, user_purpose: str | None = None):
         report = QualityReport.model_validate(quality_data)
         approve_article(article_markdown, report)
     return {
-        "selected_keyword": keyword.strip(),
-        "user_purpose": (user_purpose or "").strip(),
+        "selected_keyword": selected_keyword,
+        "user_purpose": effective_purpose,
+        "parsed_planning_row": parsed_input.selected_row,
         "model": out.get("model"),
         "reviewer_model": out.get("reviewer_model"),
         "search_results": out.get("search_results", []),
@@ -102,8 +112,9 @@ async def generate(keyword: str | None = None, user_purpose: str | None = None):
 
 @app.post("/generate")
 async def generate_from_selection(payload: GenerateRequest):
-    keyword = payload.keyword.strip()
-    user_purpose = (payload.user_purpose or "").strip()
+    parsed_input = parse_planning_input(payload.keyword)
+    keyword = parsed_input.keyword
+    user_purpose = (payload.user_purpose or parsed_input.user_purpose).strip()
     if not keyword:
         raise HTTPException(status_code=400, detail="keyword 값이 비어 있습니다.")
 
@@ -111,8 +122,8 @@ async def generate_from_selection(payload: GenerateRequest):
         out = await run_trend_writer(
             keyword=keyword,
             user_purpose=user_purpose,
+            planning_brief=parsed_input.planning_brief,
             firsthand_notes=payload.firsthand_notes,
-            source_urls=payload.source_urls,
         )
     except ContentRejectedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -126,6 +137,7 @@ async def generate_from_selection(payload: GenerateRequest):
     return {
         "selected_keyword": keyword,
         "user_purpose": user_purpose,
+        "parsed_planning_row": parsed_input.selected_row,
         "model": out.get("model"),
         "reviewer_model": out.get("reviewer_model"),
         "search_results": out.get("search_results", []),
