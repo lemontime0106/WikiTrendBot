@@ -91,6 +91,35 @@ def _temperature_for_model(model: str) -> float | None:
     return 0.35
 
 
+def _reasoning_effort_for_model(model: str) -> str:
+    explicit = (os.getenv("OPENAI_REASONING_EFFORT") or "").strip()
+    if explicit:
+        return explicit
+    if "gpt-oss" in model.lower():
+        return "low"
+    return ""
+
+
+def _strict_json_schema(schema: type[BaseModel]) -> dict[str, Any]:
+    document = json.loads(json.dumps(schema.model_json_schema()))
+
+    def make_strict(node: Any) -> None:
+        if isinstance(node, dict):
+            node.pop("default", None)
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                node["required"] = list(properties)
+                node["additionalProperties"] = False
+            for value in node.values():
+                make_strict(value)
+        elif isinstance(node, list):
+            for value in node:
+                make_strict(value)
+
+    make_strict(document)
+    return document
+
+
 async def _openai_chat_completions(
     *,
     api_key: str,
@@ -99,6 +128,8 @@ async def _openai_chat_completions(
     base_url: str = "https://api.openai.com/v1",
     temperature: float | None = None,
     max_output_tokens: int = 2600,
+    reasoning_effort: str = "",
+    response_format: dict[str, Any] | None = None,
 ) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     payload: dict[str, Any] = {
@@ -122,6 +153,10 @@ async def _openai_chat_completions(
     if temperature is not None:
         payload["temperature"] = temperature
     payload["max_tokens"] = max_output_tokens
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
+    if response_format:
+        payload["response_format"] = response_format
 
     async with httpx.AsyncClient(timeout=120) as client:
         response: httpx.Response | None = None
@@ -166,6 +201,7 @@ def _create_llm_runnable(model: str, *, max_output_tokens: int = 2600) -> Runnab
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     temperature = _temperature_for_model(model)
+    reasoning_effort = _reasoning_effort_for_model(model)
     use_rest_fallback = base_url != "https://api.openai.com/v1"
 
     if not use_rest_fallback:
@@ -186,7 +222,6 @@ def _create_llm_runnable(model: str, *, max_output_tokens: int = 2600) -> Runnab
                 os.getenv("OPENAI_MAX_OUTPUT_TOKENS", str(max_output_tokens))
             )
             kwargs["max_tokens"] = min(max_output_tokens, configured_max_tokens)
-            reasoning_effort = (os.getenv("OPENAI_REASONING_EFFORT") or "").strip()
             if reasoning_effort:
                 kwargs["reasoning_effort"] = reasoning_effort
             return ChatOpenAI(**kwargs)
@@ -197,6 +232,19 @@ def _create_llm_runnable(model: str, *, max_output_tokens: int = 2600) -> Runnab
         raise RuntimeError("OPENAI_API_KEY 환경변수를 설정해야 합니다.")
 
     class _OpenAIRestRunnable(Runnable):
+        def __init__(self, response_schema: type[BaseModel] | None = None) -> None:
+            self.response_schema = response_schema
+
+        def with_structured_output(
+            self,
+            schema: type[BaseModel],
+            *,
+            method: str = "json_schema",
+        ) -> Runnable:
+            if method != "json_schema":
+                raise ValueError("REST 폴백은 json_schema 구조화 출력만 지원합니다.")
+            return _OpenAIRestRunnable(response_schema=schema)
+
         def invoke(self, input: Any, config: Any | None = None, **kwargs: Any) -> Any:
             try:
                 asyncio.get_running_loop()
@@ -220,12 +268,27 @@ def _create_llm_runnable(model: str, *, max_output_tokens: int = 2600) -> Runnab
                 model=model,
                 base_url=base_url,
                 temperature=temperature,
+                reasoning_effort=reasoning_effort,
                 messages=input,
                 max_output_tokens=min(
                     max_output_tokens,
                     int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", str(max_output_tokens))),
                 ),
+                response_format=(
+                    {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": self.response_schema.__name__,
+                            "strict": True,
+                            "schema": _strict_json_schema(self.response_schema),
+                        },
+                    }
+                    if self.response_schema is not None
+                    else None
+                ),
             )
+            if self.response_schema is not None:
+                return _parse_json_model(text, self.response_schema)
             return AIMessage(content=text)
 
     return _OpenAIRestRunnable()
@@ -259,13 +322,36 @@ def _parse_json_model(content: str, schema: type[StructuredModel]) -> Structured
         raise RuntimeError(f"구조화된 LLM 응답 검증에 실패했습니다: {exc}") from exc
 
 
+def _looks_like_truncated_json(content: str) -> bool:
+    cleaned = content.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    if not cleaned:
+        return False
+    try:
+        json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        near_end = exc.pos >= max(0, len(cleaned) - 8)
+        unclosed_container = cleaned.count("{") > cleaned.count("}") or cleaned.count(
+            "["
+        ) > cleaned.count("]")
+        return near_end or "Unterminated string" in exc.msg or unclosed_container
+    return False
+
+
+def _structured_output_tokens() -> int:
+    configured = int(os.getenv("OPENAI_STRUCTURED_MAX_OUTPUT_TOKENS", "1600"))
+    return max(1200, min(configured, 2000))
+
+
 async def _invoke_structured(
     *,
     model: str,
     messages: list[BaseMessage],
     schema: type[StructuredModel],
 ) -> StructuredModel:
-    llm = _create_llm_runnable(model, max_output_tokens=1000)
+    output_tokens = _structured_output_tokens()
+    llm = _create_llm_runnable(model, max_output_tokens=output_tokens)
     structured_method = getattr(llm, "with_structured_output", None)
     if callable(structured_method):
         for method in ("json_schema", "function_calling"):
@@ -282,16 +368,43 @@ async def _invoke_structured(
         *messages,
         HumanMessage(
             content=(
-                "응답은 설명 없이 다음 JSON Schema를 만족하는 JSON 객체 하나만 출력하세요.\n"
-                + json.dumps(schema.model_json_schema(), ensure_ascii=False)
+                "응답은 설명이나 코드 펜스 없이 다음 JSON Schema를 만족하는 JSON 객체 하나만 "
+                "간결하게 출력하세요. 문자열은 한 문장으로 짧게 쓰고 배열 항목을 반복하지 마세요.\n"
+                + json.dumps(
+                    schema.model_json_schema(),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
             )
         ),
     ]
-    result = await llm.ainvoke(fallback_messages)
-    content = _message_content(result)
-    if not content.strip():
-        raise RuntimeError("구조화된 LLM 응답이 비어 있습니다.")
-    return _parse_json_model(content, schema)
+    for attempt in range(2):
+        attempt_messages = fallback_messages
+        if attempt:
+            attempt_messages = [
+                *fallback_messages,
+                HumanMessage(
+                    content=(
+                        "직전 응답이 출력 한도에서 잘렸습니다. 모든 문자열을 120자 이내로 줄이고 "
+                        "각 배열은 꼭 필요한 항목만 남겨 완결된 JSON 객체를 출력하세요."
+                    )
+                ),
+            ]
+            llm = _create_llm_runnable(
+                model,
+                max_output_tokens=min(output_tokens + 300, 2000),
+            )
+        result = await llm.ainvoke(attempt_messages)
+        content = _message_content(result)
+        if not content.strip():
+            raise RuntimeError("구조화된 LLM 응답이 비어 있습니다.")
+        try:
+            return _parse_json_model(content, schema)
+        except RuntimeError:
+            if attempt == 0 and _looks_like_truncated_json(content):
+                continue
+            raise
+    raise RuntimeError("구조화된 LLM 응답을 완성하지 못했습니다.")
 
 
 def _normalize_tistory_text(content: str) -> str:
@@ -418,7 +531,9 @@ async def node_plan_article(state: TrendWriterState) -> TrendWriterState:
                 "- 실제 URL이 수집된 주장에만 source_urls를 넣고 URL이 없으면 빈 배열로 둘 것\n"
                 "- 자료가 서로 충돌하거나 얕으면 발행 불가로 판정\n"
                 "- unique_angle은 일반적인 정의 요약이 아니라 독자가 실행하거나 판단할 수 있는 구체적인 각도여야 함\n"
-                "- 글을 읽은 독자가 무엇을 할 수 있게 되는지 reader_outcome에 명확히 작성\n",
+                "- 글을 읽은 독자가 무엇을 할 수 있게 되는지 reader_outcome에 명확히 작성\n"
+                "- key_questions는 최대 4개, supported_claims는 핵심 주장 3~5개, claims_to_avoid는 최대 3개\n"
+                "- 각 문자열은 한 문장, 120자 이내로 간결하게 작성\n",
             ),
         ]
     )
@@ -580,7 +695,9 @@ async def _review_article(
                 "- 금융·의료·법률 조언이면 risk_level=high\n"
                 "- blocking_issues 또는 unsupported_claims가 하나라도 있으면 passed=false\n"
                 "- 80점 미만이면 passed=false\n"
-                "- recommended_tags는 글에 실제 등장하는 핵심 개념만 5~8개 추천\n",
+                "- recommended_tags는 글에 실제 등장하는 핵심 개념만 5~8개 추천\n"
+                "- 각 문제·주장·수정 지시는 최대 5개, 항목당 120자 이내로 작성\n"
+                "- summary는 180자 이내로 간결하게 작성\n",
             ),
         ]
     )

@@ -75,12 +75,13 @@ API의 `user_purpose`, `firsthand_notes`는 외부 자동화 연동이나 운영
 - `OPENAI_MODEL`: 작성·검수 공통 모델
 - `OPENAI_WRITER_MODEL`: 작성 모델. 설정하면 `OPENAI_MODEL`보다 우선
 - `OPENAI_REVIEW_MODEL`: 기획·검수 모델. 설정하면 작성 모델과 분리
-- `OPENAI_REASONING_EFFORT`: 선택
+- `OPENAI_REASONING_EFFORT`: 선택. GPT-OSS는 토큰 절약을 위해 미설정 시 `low`
 - `OPENAI_TEMPERATURE`: 선택. GPT-5·o-series는 미설정 시 요청에서 제외
 - `OPENAI_MAX_OUTPUT_TOKENS`: 출력 토큰 상한, 예시 기본 2600
+- `OPENAI_STRUCTURED_MAX_OUTPUT_TOKENS`: 기획·검수 JSON 출력 상한, 기본 1600. 잘리면 최대 2000 범위에서 한 번 압축 재시도
 - `OPENAI_BASE_URL`: 기본값 `https://api.openai.com/v1`
 
-LangChain의 구조화 출력을 우선 사용하고, 지원하지 않는 호환 API에서는 JSON 스키마 프롬프트 방식으로 대체합니다.
+LangChain의 구조화 출력을 우선 사용하고, 호환 API에도 JSON Schema 강제 출력을 먼저 요청합니다. 지원하지 않는 API에서는 스키마 프롬프트 방식으로 대체합니다.
 
 ## 콘텐츠 품질 설정
 
